@@ -54,7 +54,7 @@ que solo se incluyen las adaptaciones OCR aquí contenidas).
 | `extractor_final.py` | Extracción directa con ChartParsing: `datos_extraidos.csv` + `salida_bruta.json`. Expone `obtener_markdown()`, `markdown_a_df()`, `validar_imagen()`. |
 | `chart_ocr.py` | CLI Chart OCR (PP-Chart2Table): `python chart_ocr.py imagen.png [--json] [--csv out.csv] [--raw out.json]`. |
 | `chart_server.py` | Daemon HTTP: POST `/chart` (→ `markdown` + `csv`), GET `/health`. Auto-cierre tras inactividad (default 3600 s). |
-| `ocr_server.py` | **Servicio unificado de OCR + visión IA + chart** (puerto canónico 8131): POST `/ocr` (textos + `missing`/`all_found`), POST `/ask` (pregunta en lenguaje natural, 4 motores), POST `/chart` (tabla de gráfico → markdown+csv), POST `/vision` (multi-modo), GET `/health`. Modelos perezosos; `--timeout 0` = servicio permanente; límite de cuerpo 1 MB. |
+| `ocr_server.py` | **Servicio unificado de OCR + visión IA + chart** (puerto canónico 8131): POST `/ocr`, `/ask`, `/chart`, `/vision` con **cola FIFO** (worker serializado, `/health` y `/resultado/<job_id>` instantáneos siempre), modo sync (`espera_s`) y async (`"async": true` → 202 + polling), GET `/health` y GET `/resultado/<job_id>`. Modelos perezosos; `--timeout 0` = servicio permanente; límite de cuerpo 1 MB. |
 | `ocr_verify.py` | Verificación visual de textos esperados en una captura (PP-OCRv6 / PaddleOCR-VL) + `--ask` con DocUnderstanding. Funciones reutilizables (`crear_modelo_ocr`, `predecir_textos`, `preguntar`...). |
 | `vision360.py` | **Visión 360 híbrida:** Set-of-Marks + verdad de campo DOM + QA VLM por recortes. `python vision360.py --image shot.png --regions regions.json --engine ollama`. |
 | `setup-ocr.ps1` | **Setup Windows del venv** (Python 3.11-3.13): crea `.venv-ocr` con paddlepaddle==3.3.1 + paddleocr[doc-parser]==3.7.0. |
@@ -103,6 +103,17 @@ curl -X POST http://127.0.0.1:8131/ocr -H "Content-Type: application/json" -d "{
 curl -X POST http://127.0.0.1:8131/ask -H "Content-Type: application/json" -d "{\"image\": \"shot.png\", \"query\": \"Cuantos paneles hay?\", \"engine\": \"ollama\"}"
 curl -X POST http://127.0.0.1:8131/chart -H "Content-Type: application/json" -d "{\"image\": \"ejemplos/grafico_demo.png\"}"
 curl -X POST http://127.0.0.1:8131/vision -H "Content-Type: application/json" -d "{\"image\": \"foto.png\", \"modo\": \"objetos\"}"
+
+# 3e. Canalizar y encolar (cola FIFO + async con job_id)
+#     Las inferencias se serializan (PaddleX no es thread-safe) y el servidor
+#     NUNCA se bloquea: /health responde en ~ms incluso con un chart de 5 min.
+#     Modo sync: espera "espera_s" (default 600) y devuelve 503 con job_id si
+#     se agota. Modo async (recomendado para trabajos largos):
+curl -X POST http://127.0.0.1:8131/chart -H "Content-Type: application/json" -d "{\"image\": \"ejemplos/grafico_demo.png\", \"async\": true}"
+#   -> {"job_id": "abc123", "resultado": "/resultado/abc123"}
+curl http://127.0.0.1:8131/resultado/abc123   # 202 {estado: en_cola|en_curso} -> 200 {resultado}
+#     El cuerpo "async": true admite tambien "espera_s" si quieres esperar un poco
+#     antes de pasar a polling.
 
 # 3e. Vision 360 híbrida (SoM + DOM + QA por regiones)
 .venv-ocr\Scripts\python.exe vision360.py --image shot.png --regions regions.json --engine ollama --ask-regions 1 3
