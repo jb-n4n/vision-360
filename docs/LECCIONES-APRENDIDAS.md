@@ -216,3 +216,25 @@
 **Resultado:** 8/8 tests de docbee en GPU (3.5–12 s por test, salvo descripcion 205 s y documento 165 s), ~7.1 GB de RAM. vs gemma3:4b: docbee gana ui_qa (4/4 vs 2/4) y personas (1/2 vs 0/2); gemma gana valores y velocidad — pero docbee corrió con resolución limitada (0.5M px) por el OOM, así que la comparación de valores es injusta a favor de gemma. Ver PRUEBAS.md §4.1.
 
 **Lección:** en GPU de 8 GB los VLM 2B caben solo con max_pixels reducido; y cada capa (device name, key del input, dtype de índices, pool de memoria, shadowing de libs dinámicas) es una fuente real de fallo que no aparece en CPU — el harness debe ejecutarse en la máquina objetivo antes de declarar un motor "validado".
+
+
+## 18. Experimento captcha real: loop completo y sus limites (2026-08-06)
+
+**Contexto:** objetivo adicional y secundario â€” resolver un reto visual tipo captcha (reCAPTCHA v2) con el stack local desde un NAVEGADOR TEMPORAL (Playwright, contexto fresco desechable: sin perfil ni cookies). Modo REAL por default (decision del programador), --local para demo sintetica 3x3 determinista.
+
+**Lo que funciona (verificado en vivo):** ciclo completo checkbox -> reto en iframe bframe -> instruccion leida del DOM (con fallback OCR) -> captura de la cuadricula 3x3/4x4 -> resolucion -> clics JS en los tiles -> VERIFY (o SKIP) -> veredicto real por el estado del checkbox del ancla (rc-anchor-checkbox-checked).
+
+**Hallazgos y lecciones:**
+1. **El clic normal de Playwright falla en los tiles** ("element is outside of the viewport"): reCAPTCHA posiciona los tiles con transforms anti-automatizacion. Fix: click JS (el.click()) â€” verificado que registra la seleccion (clase rc-imageselect-tileselected).
+2. **El reto real expira en ~2 min**: el VLM (qwen2.5vl:3b en CPU) tarda 2-3 min y sobre-selecciona (dijo 7,8,9,10,11 cuando habia 1 moto). Para objetos COCO se usa SOLO RT-DETR (~20-40 s, cabe en la ventana); el VLM queda para no-COCO (crosswalks, stairs...).
+3. **Objetos pequenos puntuan ~0.5-0.6** (bicicleta real a 0.55, bajo el umbral 0.6). Fix: umbral 0.45 para la clase objetivo del reto (0.6 para el resto).
+4. **Deteccion por celda con upscale 2x** (LANCZOS) sube los scores y la resolucion de objetos pequenos (n*n llamadas /vision; tolerante a fallos por celda).
+5. **Parser de instrucciones**: prefijos "select all images/squares/tiles with", articulos ("a fire hydrant"), plurales irregulares (buses, crosswalks), y recorte del texto accesorio CONCATENADO sin espacio ("traffic lightsIf there are none, click skip") + flag permite_skip.
+6. **Precision contra retos reales ~50-70% (esperado, confirmado)**: 3x3 buses -> los 3 buses detectados y aun asi rechazado (imagenes adversarias: buses ocultos que el modelo no ve o falsos positivos). 4x4 motorcycles -> celda 12 acertada en el detector.
+7. **Estabilidad**: la sesion paralela reinicia el daemon a mitad de ejecucion y corta el loop (el experimento murio con exit -1 sin traceback; el daemon registro el ConnectionReset del cliente). El loop por celda ahora tolera fallos por celda.
+
+**Pendientes (seguir):**
+1. Verificar la pasada por celda offline sobre la cuadricula 4x4 de motos guardada (captcha_reto_grid.png en temp) â€” el daemon se reinicio a mitad y corto la prueba.
+2. Reintento automatico de 2-3 rondas cuando el reto se re-renderiza tras un rechazo.
+3. Evaluar /vision por CLI (subproceso) en vez de n*n llamadas HTTP al daemon, o reintento por celda, para resistir reinicios del daemon.
+4. Validar SKIP en vivo (reto crosswalks con "If there are none, click skip").
