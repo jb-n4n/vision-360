@@ -140,6 +140,34 @@ powershell -ExecutionPolicy Bypass -File scripts/servicio-ollama.ps1 -Verificar
 Los clientes (vision360.py, ocr_verify.py, los e2e de drilling-visualization)
 apuntan por defecto a `127.0.0.1:8131` (daemon) y `127.0.0.1:11434` (Ollama).
 
+## Arrancar el servicio desde tu propia ventana
+
+El servicio se controla con `scripts/servicio-vision.ps1` (daemon en 8131) y
+`scripts/servicio-ollama.ps1` (Ollama en 11434). **Desde PowerShell**, sin
+prefijos (como ya estás en PowerShell):
+
+```powershell
+C:\Desa\vision-360\scripts\servicio-vision.ps1 -Iniciar     # detecta intérprete incorrecto, deja UNA instancia venv, logs en logs/
+C:\Desa\vision-360\scripts\servicio-vision.ps1 -Detener     # detiene el daemon
+C:\Desa\vision-360\scripts\servicio-vision.ps1 -Estado      # estado + /health
+C:\Desa\vision-360\scripts\servicio-ollama.ps1 -Verificar   # ollama compartido + modelos
+```
+
+**Desde CMD** (o fuera de PowerShell), con el prefijo completo:
+
+```cmd
+powershell -ExecutionPolicy Bypass -File C:\Desa\vision-360\scripts\servicio-vision.ps1 -Iniciar
+```
+
+Qué hace `-Iniciar`: verifica que quien escucha en 8131 sea el daemon del
+venv (`.venv-ocr`); si el puerto lo tiene un proceso con el python del sistema
+(sin paddleocr), lo detiene, limpia cualquier daemon existente y arranca **una
+sola instancia** correcta con logs en `logs/servicio-vision.{out,err}.log`.
+Tras actualizar el paquete, reinicia con `-Detener` + `-Iniciar` para que corra
+el código nuevo. El propio daemon también se protege: si se lanza con el
+intérprete equivocado, sale solo con el mensaje *"usa
+.venv-ocr\Scripts\python.exe"* (exit 2).
+
 ## Perfiles por máquina (visión)
 
 Cada equipo puede limitar los modos según su RAM, sin borrar código:
