@@ -45,6 +45,17 @@ function Get-ProcesoDaemon {
         Where-Object { $_.CommandLine -like "*ocr_server.py*" -and $_.CommandLine -like "*$PUERTO*" }
 }
 
+function Get-PuertoProceso {
+    $c = Get-NetTCPConnection -LocalPort $PUERTO -State Listen -ErrorAction SilentlyContinue
+    if ($c) { Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $c.OwningProcess) } else { $null }
+}
+
+function Test-InterpreteCorrecto {
+    param($proc)
+    if (-not $proc) { return $false }
+    return $proc.CommandLine -like '*\.venv-ocr\*'
+}
+
 function Write-Estado {
     $tarea = Get-ScheduledTask -TaskName $TAREA -ErrorAction SilentlyContinue
     $vivo = Test-ServicioVivo
@@ -91,10 +102,25 @@ if ($Instalar) {
 }
 
 if ($Iniciar) {
-    if (Test-ServicioVivo) {
-        Write-Host "El servicio ya responde en $URL. Nada que hacer."
+    if (-not (Test-Path $PY)) { throw "No hay venv OCR en $PY (ejecuta setup-ocr.ps1 antes)." }
+
+    # Prevencion: el que responde en el puerto debe ser el daemon del VENV
+    # (el python del sistema NO tiene paddleocr y el daemon fallaria en la
+    # primera inferencia). Si no lo es, se limpia TODO y se arranca uno solo.
+    $owner = Get-PuertoProceso
+    if ($owner -and (Test-InterpreteCorrecto $owner)) {
+        Write-Host "El servicio ya responde en $URL con el daemon del venv (PID $($owner.ProcessId)). Nada que hacer."
     } else {
-        if (-not (Test-Path $PY)) { throw "No hay venv OCR en $PY (ejecuta setup-ocr.ps1 antes)." }
+        if ($owner) {
+            Write-Host "AVISO: el puerto lo tiene un proceso con interprete incorrecto (PID $($owner.ProcessId)). Deteniendolo..."
+        }
+        $procs = Get-ProcesoDaemon
+        foreach ($p in $procs) {
+            Write-Host "  deteniendo PID $($p.ProcessId) ..."
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 2
+
         New-Item -ItemType Directory -Path $LOG_DIR -Force | Out-Null
         Write-Host "Arrancando daemon unico (puerto $PUERTO, --timeout 0, logs en $LOG_DIR)..."
         Start-Process -FilePath $PY -ArgumentList "`"$DAEMON`"", "--port", "$PUERTO", "--timeout", "0", "--ask-engine", "ollama" -WorkingDirectory $RAIZ -WindowStyle Hidden -RedirectStandardOutput $LOG_OUT -RedirectStandardError $LOG_ERR
