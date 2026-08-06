@@ -127,7 +127,8 @@ if ($args -contains '--pre-commit') {
     Write-Output "  [SKIP] no es un repo git todavia (git init para activar las comprobaciones)"
 } else {
     Check "arbol de trabajo limpio" {
-        if ((git status --porcelain) -ne '') { throw 'hay cambios sin commitear' }
+        $out = (git status --porcelain | Out-String).Trim()
+        if (-not [string]::IsNullOrEmpty($out)) { throw "hay cambios sin commitear: $out" }
     }
     Check "rama main sincronizada con origin" {
         $b = git status --porcelain --branch
