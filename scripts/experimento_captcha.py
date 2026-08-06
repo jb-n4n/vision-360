@@ -368,7 +368,8 @@ def main():
         page.locator("#grid").screenshot(path=str(grid))
         print(f"captura de la cuadricula -> {grid}")
 
-        elegidas, detalle = resolver(grid, "una persona", clase_rtdetr="person")
+        elegidas, detalle = resolver(grid, "una persona", clase_rtdetr="person",
+                                     usar_vlm=False)
         print("\n== Resolucion (demo local) ==")
         for n, dets in detalle["detector"].items():
             for c, score in dets:
