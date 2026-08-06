@@ -20,11 +20,12 @@ Diseno:
   - Clic en las celdas elegidas dentro del navegador temporal + veredicto.
 
 Uso:
-  .venv-ocr/Scripts/python.exe scripts/experimento_captcha.py
-  .venv-ocr/Scripts/python.exe scripts/experimento_captcha.py --real
-      --real: abre el demo oficial de reCAPTCHA v2 (google.com/recaptcha/api2/demo).
-              EXPERIMENTAL: la automatizacion de captchas reales queda fuera
-              del uso recomendado del paquete; ejecutala bajo tu criterio.
+  .venv-ocr/Scripts/python.exe scripts/experimento_captcha.py          # REAL por defecto: demo oficial reCAPTCHA v2
+  .venv-ocr/Scripts/python.exe scripts/experimento_captcha.py --local  # demo sintetica local (determinista, sin red)
+
+NOTA (decision del programador): el modo REAL es el comportamiento por
+defecto por decision explicita del responsable del proyecto. --local genera
+una pagina sintetica 3x3 para pruebas deterministas sin red.
 
 Requiere: daemon corriendo (.venv-ocr/Scripts/python.exe ocr_server.py
 --port 8131 --timeout 0 --ask-engine ollama) y Ollama compartido en 11434.
@@ -159,8 +160,8 @@ def resolver(grid):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--real", action="store_true",
-                    help="Abrir el demo oficial de reCAPTCHA v2 (EXPERIMENTAL)")
+    ap.add_argument("--local", action="store_true",
+                    help="Usar la demo sintetica local (file://) en vez del demo real de reCAPTCHA v2 (default)")
     args = ap.parse_args()
 
     from playwright.sync_api import sync_playwright
@@ -171,10 +172,20 @@ def main():
         context = browser.new_context()
         page = context.new_page()
 
-        if args.real:
+        if not args.local:
             page.goto("https://www.google.com/recaptcha/api2/demo", timeout=60000)
-            print("Pagina real abierta en navegador temporal (resolucion manual no automatizada).")
+            print("Demo REAL de reCAPTCHA v2 abierto en navegador temporal.")
             print("URL:", page.url)
+            try:
+                checkbox = page.frame_locator("iframe[src*='recaptcha']").get_by_role(
+                    "checkbox", name="I'm not a robot")
+                checkbox.click(timeout=15000)
+                print("Checkbox 'I'm not a robot' clickeado (el reto real queda para la sesion siguiente).")
+            except Exception as exc:
+                print(f"No se pudo clickear el checkbox: {exc}")
+            page.wait_for_timeout(4000)
+            page.screenshot(path=str(TEMP / "captcha_real.png"), full_page=True)
+            print(f"captura -> {TEMP / 'captcha_real.png'}")
             browser.close()
             return 0
 
