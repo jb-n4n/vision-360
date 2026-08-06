@@ -124,7 +124,7 @@ def _som(grid, out, n=3):
     return out
 
 
-def _celdas_detector(grid, clase=None, n=3):
+def _celdas_detector(grid, clase=None, n=3, umbral=UMBRAL_RTDETR):
     """RT-DETR via daemon: celdas con objeto por encima del umbral.
     Si `clase` no es None, solo cuenta detecciones de esa clase COCO."""
     from PIL import Image
@@ -133,7 +133,7 @@ def _celdas_detector(grid, clase=None, n=3):
     res = _post("/vision", {"image": str(grid), "modo": "objetos"})
     celdas = {}
     for d in res.get("detecciones", []):
-        if d["score"] < UMBRAL_RTDETR:
+        if d["score"] < umbral:
             continue
         if clase and d["clase"] != clase:
             continue
@@ -162,13 +162,14 @@ def _celdas_vlm(grid, objeto, n=3):
     return texto, numeros
 
 
-def resolver(grid, objeto_vlm, clase_rtdetr=None, n=3, usar_vlm=True):
+def resolver(grid, objeto_vlm, clase_rtdetr=None, n=3, usar_vlm=True,
+             umbral=UMBRAL_RTDETR):
     """Resuelve la cuadricula y devuelve (celdas_elegidas, detalle).
 
     Fusion: si el objeto es COCO (RT-DETR disponible) mandan las celdas del
     detector (el VLM sobre-selecciona y tarda ~2-3 min: el reto real expira
     en ~2 min); si no es COCO, mandan las del VLM."""
-    detalle = {"detector": _celdas_detector(grid, clase_rtdetr, n=n)}
+    detalle = {"detector": _celdas_detector(grid, clase_rtdetr, n=n, umbral=umbral)}
     if usar_vlm:
         texto, numeros = _celdas_vlm(grid, objeto_vlm, n=n)
     else:
@@ -275,10 +276,13 @@ def _reto_real(page):
 
     # 5. Resolucion. Objeto COCO -> solo RT-DETR (rapido, ~20 s: el reto real
     #    expira en ~2 min); objeto no-COCO -> VLM (lento, riesgo de expirar).
+    #    Umbral rebajado para la clase objetivo: en grids reales los objetos
+    #    pequenos puntuan ~0.5-0.6 (leccion: bicycles 0.55 bajo el 0.6).
     objeto_vlm = ("una persona" if not objeto else ("un/a " + objeto))
     usar_vlm = clase is None
+    umbral = 0.45 if clase else UMBRAL_RTDETR
     elegidas, detalle = resolver(grid, objeto_vlm, clase_rtdetr=clase, n=n,
-                                 usar_vlm=usar_vlm)
+                                 usar_vlm=usar_vlm, umbral=umbral)
     print("\n== Resolucion del reto real ==")
     for num, dets in detalle["detector"].items():
         for c, score in dets:
