@@ -14,6 +14,7 @@ import unittest
 import urllib.error
 import urllib.request
 from http.server import HTTPServer
+from unittest import mock
 
 import ocr_server
 
@@ -55,6 +56,28 @@ class ModeloChartFalso:
     def predict(self, entrada):
         time.sleep(0.05)
         return [ResultadoChartFalso("| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |")]
+
+
+class TestGuardsPrevencion(unittest.TestCase):
+    """Guards de prevencion: puerto en uso y dependencia paddleocr."""
+
+    def test_puerto_ocupado_verdadero(self):
+        srv = HTTPServer(("127.0.0.1", 8127), lambda *a, **k: None)
+        self.addCleanup(srv.server_close)
+        self.assertTrue(ocr_server.puerto_ocupado("127.0.0.1", 8127))
+
+    def test_puerto_ocupado_falso(self):
+        self.assertFalse(ocr_server.puerto_ocupado("127.0.0.1", 8127))
+
+    def test_verificar_paddleocr_sin_dependencia(self):
+        with mock.patch("ocr_server.importlib.util.find_spec", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "venv"):
+                ocr_server.verificar_paddleocr()
+
+    def test_verificar_paddleocr_ok(self):
+        # En el entorno de tests paddleocr puede existir o no: el guard solo
+        # falla si NO se encuentra el modulo.
+        ocr_server.verificar_paddleocr()
 
 
 class TestOcrServer(unittest.TestCase):

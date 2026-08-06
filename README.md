@@ -88,9 +88,8 @@ powershell -ExecutionPolicy Bypass -File setup-ocr.ps1
 # 3a. Chart OCR directo
 .venv-ocr\Scripts\python.exe chart_ocr.py ejemplos\grafico_demo.png --csv tabla.csv --raw bruto.json
 
-# 3b. Daemon persistente (chart, auto-cierre tras 1 h sin peticiones)
-.venv-ocr\Scripts\python.exe chart_server.py --port 8080
-curl -X POST http://127.0.0.1:8080/chart -H "Content-Type: application/json" -d "{\"image\": \"ejemplos/grafico_demo.png\"}"
+# 3b. [Legacy] Daemon SOLO de chart (el servicio unico de 3d cubre /chart)
+# .venv-ocr\Scripts\python.exe chart_server.py --port 8080
 
 # 3c. Visión multi-modo (CLI)
 .venv-ocr\Scripts\python.exe vision.py ejemplos\test_charts\bar_2series.png --modo graficos --salida csv
@@ -108,6 +107,27 @@ curl -X POST http://127.0.0.1:8131/vision -H "Content-Type: application/json" -d
 # 3e. Vision 360 híbrida (SoM + DOM + QA por regiones)
 .venv-ocr\Scripts\python.exe vision360.py --image shot.png --regions regions.json --engine ollama --ask-regions 1 3
 ```
+
+## Servicio permanente compartido (daemon unico en 8131 + Ollama en 11434)
+
+Para que TODOS los proyectos locales usen el MISMO daemon y el MISMO Ollama:
+
+```powershell
+# Daemon unico OCR + Vision IA + Chart (puerto 8131, sin auto-cierre):
+powershell -ExecutionPolicy Bypass -File scripts/servicio-vision.ps1 -Iniciar   # arrancar ahora
+powershell -ExecutionPolicy Bypass -File scripts/servicio-vision.ps1 -Instalar  # auto-arranque al iniciar sesion (tarea ONLOGON)
+powershell -ExecutionPolicy Bypass -File scripts/servicio-vision.ps1 -Estado    # estado + health
+
+# Ollama compartido (127.0.0.1:11434): estado, aplicar config de RAM, o registrar
+# auto-arranque (tarea ONLOGON con fallback HKCU Run; la variante de servicio
+# de Windows real requiere admin — ver el script):
+powershell -ExecutionPolicy Bypass -File scripts/ollama_compartida.ps1
+powershell -ExecutionPolicy Bypass -File scripts/ollama_compartida.ps1 -Apply
+powershell -ExecutionPolicy Bypass -File scripts/servicio-ollama.ps1 -Verificar
+```
+
+Los clientes (vision360.py, ocr_verify.py, los e2e de drilling-visualization)
+apuntan por defecto a `127.0.0.1:8131` (daemon) y `127.0.0.1:11434` (Ollama).
 
 ## Perfiles por máquina (visión)
 

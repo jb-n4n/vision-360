@@ -20,6 +20,9 @@ vision_respuesta.txt
 *.crop*.png
 ocr_resized.png
 
+# Logs del servicio unico (scripts/servicio-vision.ps1)
+logs/
+
 # Salidas de la batería 360° y benchmarks
 salida/
 *.reporte.json

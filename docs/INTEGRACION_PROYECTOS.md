@@ -22,9 +22,10 @@ install limpio sin el venv correspondiente).
        from ocr_rapido import emparejar, extraer_tabla
    ```
 
-3. **Venv dedicado** (`.venv-ocr`) creado con `setup-ocr.ps1`; los daemons
-   (`ocr_server.py`, `chart_server.py`) se lanzan una vez y se matan al terminar
-   la suite de pruebas — nunca un intérprete Python por captura.
+3. **Venv dedicado** (`.venv-ocr`) creado con `setup-ocr.ps1`; el **servicio
+   unico** (`ocr_server.py --port 8131`) se lanza una vez como servicio
+   compartido (`scripts/servicio-vision.ps1`) y los proyectos SOLO lo consumen
+   por HTTP — nunca un intérprete Python por captura ni un daemon por proyecto.
 
 ## En drilling-visualization (React + Vite + Tauri) — ya integrado
 
@@ -34,7 +35,9 @@ install limpio sin el venv correspondiente).
   - `test:ocr`: `playwright test visual-ocr.spec.js`
   - `test:ocr:setup`: `powershell -ExecutionPolicy Bypass -File scripts/ocr/setup-ocr.ps1`
 - `e2e/visual-ocr.spec.js` lanza `ocr_server.py` en `beforeAll` y lo mata en
-  `afterAll`; los asserts de texto usan `ocr_verify.py` (PP-OCRv6, lang=es).
+  `afterAll` (si el servicio unico 8131 ya corre, la comprobacion de salud lo
+  reutiliza: misma API, mismos endpoints); los asserts de texto usan
+  `ocr_verify.py` (PP-OCRv6, lang=es).
 - La suite e2e **se auto-salta** si falta el venv (`spawnSync` de
   `.venv-ocr/Scripts/python.exe`).
 - Vision 360: `scripts/ocr/vision360.py --image shot.png --regions regions.json

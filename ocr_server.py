@@ -43,10 +43,12 @@ Uso:
 """
 
 import argparse
+import importlib.util
 import json
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 import time
@@ -72,8 +74,23 @@ MOTORES_VALIDOS = {"paddleocr-vl", "docbee", "ollama", "gemma3"}
 # Limita la memoria de peticiones maliciosas o rotas (respuesta 413).
 MAX_CUERPO = 1_048_576
 
+MENSAJE_VENV = (
+    "paddleocr no esta disponible en este interprete. Ejecuta el daemon con "
+    "el venv del proyecto: .venv-ocr\\Scripts\\python.exe ocr_server.py (ver "
+    "setup-ocr.ps1 para crearlo)."
+)
+
+
+def verificar_paddleocr():
+    """Guard de prevencion: falla rapido con un mensaje claro si el interprete
+    no tiene paddleocr (p. ej. daemon lanzado con el python del sistema en vez
+    del venv). Se ejecuta ANTES de cualquier carga de modelo."""
+    if importlib.util.find_spec("paddleocr") is None:
+        raise RuntimeError(MENSAJE_VENV)
+
 
 def cargar_modelo_ocr(lang="es"):
+    verificar_paddleocr()
     LOG.info("Cargando modelo PP-OCRv6 (lang=%s)...", lang)
     modelo = crear_modelo_ocr(lang=lang)  # device explicito dentro
     LOG.info("Modelo OCR cargado. Listo para recibir peticiones.")
@@ -81,6 +98,7 @@ def cargar_modelo_ocr(lang="es"):
 
 
 def cargar_modelo_vision(engine="paddleocr-vl"):
+    verificar_paddleocr()
     LOG.info("Cargando modelo de vision (%s, puede tardar)...", engine)
     modelo = crear_modelo_vision(engine)
     LOG.info("Modelo de vision cargado (%s).", engine)
@@ -88,12 +106,29 @@ def cargar_modelo_vision(engine="paddleocr-vl"):
 
 
 def cargar_modelo_chart():
+    verificar_paddleocr()
     from paddleocr import ChartParsing  # import perezoso: VLM pesado
 
     LOG.info("Cargando modelo PP-Chart2Table (puede tardar ~95 s y 4.8 GB de RAM)...")
     modelo = ChartParsing(device="cpu")  # device explicito: el default prioriza GPU
     LOG.info("Modelo chart cargado. Listo para recibir peticiones.")
     return modelo
+
+
+def puerto_ocupado(host, port):
+    """True si hay un socket escuchando en host:port.
+
+    Guard de prevencion: en Windows un segundo HTTPServer con SO_REUSEADDR
+    puede 'secuestrar' las conexiones del primero en silencio; si el puerto ya
+    esta en uso, el daemon debe fallar con un mensaje claro en lugar de correr
+    duplicado."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1)
+        try:
+            s.bind((host, port))
+        except OSError:
+            return True
+        return False
 
 
 def ollama_disponible():
@@ -294,6 +329,16 @@ def main():
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+
+    # Prevencion: la inferencia es de un solo hilo (PaddleX no es thread-safe);
+    # un hilo de CPU evita problemas de OpenBLAS con multi-threads.
+    os.environ["OMP_NUM_THREADS"] = "1"
+
+    if puerto_ocupado(args.host, args.port):
+        LOG.error("El puerto %s:%d ya esta en uso: hay otra instancia del daemon "
+                  "corriendo (o la sesion anterior no cerro). Detenla antes de "
+                  "arrancar otra.", args.host, args.port)
+        sys.exit(2)
 
     estado = {
         "ocr": None,

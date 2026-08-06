@@ -29,6 +29,9 @@ $URL = "http://127.0.0.1:$PUERTO/health"
 $RAIZ = Split-Path -Parent $PSScriptRoot
 $PY = Join-Path $RAIZ '.venv-ocr\Scripts\python.exe'
 $DAEMON = Join-Path $RAIZ 'ocr_server.py'
+$LOG_DIR = Join-Path $RAIZ 'logs'
+$LOG_OUT = Join-Path $LOG_DIR 'servicio-vision.out.log'
+$LOG_ERR = Join-Path $LOG_DIR 'servicio-vision.err.log'
 
 function Test-ServicioVivo {
     try {
@@ -92,8 +95,9 @@ if ($Iniciar) {
         Write-Host "El servicio ya responde en $URL. Nada que hacer."
     } else {
         if (-not (Test-Path $PY)) { throw "No hay venv OCR en $PY (ejecuta setup-ocr.ps1 antes)." }
-        Write-Host "Arrancando daemon unico (puerto $PUERTO, --timeout 0)..."
-        Start-Process -FilePath $PY -ArgumentList "`"$DAEMON`"", "--port", "$PUERTO", "--timeout", "0", "--ask-engine", "ollama" -WorkingDirectory $RAIZ -WindowStyle Hidden
+        New-Item -ItemType Directory -Path $LOG_DIR -Force | Out-Null
+        Write-Host "Arrancando daemon unico (puerto $PUERTO, --timeout 0, logs en $LOG_DIR)..."
+        Start-Process -FilePath $PY -ArgumentList "`"$DAEMON`"", "--port", "$PUERTO", "--timeout", "0", "--ask-engine", "ollama" -WorkingDirectory $RAIZ -WindowStyle Hidden -RedirectStandardOutput $LOG_OUT -RedirectStandardError $LOG_ERR
         for ($i = 0; $i -lt 30; $i++) {
             Start-Sleep -Seconds 1
             if (Test-ServicioVivo) { break }
@@ -101,7 +105,7 @@ if ($Iniciar) {
         if (Test-ServicioVivo) {
             Write-Host "Servicio respondiendo en $URL"
         } else {
-            Write-Host "AVISO: el servicio aun no responde tras 30s. Revisa el proceso."
+            Write-Host "AVISO: el servicio aun no responde tras 30s. Revisa el log: $LOG_ERR"
         }
     }
 }
