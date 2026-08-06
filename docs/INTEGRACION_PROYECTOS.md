@@ -83,6 +83,12 @@ proyecto. Ya es así por construcción:
 | drilling-visualization (idéntico) | `http://127.0.0.1:11434/api/chat` | QA de capturas e2e |
 | multistat (`descripcion_360.py`) | `http://localhost:11434/api/generate` | descripción 360 de paneles |
 
+El **servicio unificado** del paquete es `ocr_server.py` en el puerto canónico
+`127.0.0.1:8131` (POST /ocr, /ask, /chart, /vision; `--timeout 0` = permanente):
+todos los proyectos locales consumen ese único daemon para OCR + Visión IA +
+Chart. Autostart y gestión con `scripts/servicio-ollama.ps1` y
+`scripts/servicio-vision.ps1` (tarea ONLOGON con fallback HKCU Run).
+
 Configuración recomendada (host 16 GB) y cómo aplicarla: ver `README.md`
 sección "Instancia única de Ollama compartida". Script idempotente:
 `scripts/ollama_compartida.ps1` (`-Check` estado / `-Apply` aplica + reinicia +

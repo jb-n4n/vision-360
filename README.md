@@ -54,7 +54,7 @@ que solo se incluyen las adaptaciones OCR aquí contenidas).
 | `extractor_final.py` | Extracción directa con ChartParsing: `datos_extraidos.csv` + `salida_bruta.json`. Expone `obtener_markdown()`, `markdown_a_df()`, `validar_imagen()`. |
 | `chart_ocr.py` | CLI Chart OCR (PP-Chart2Table): `python chart_ocr.py imagen.png [--json] [--csv out.csv] [--raw out.json]`. |
 | `chart_server.py` | Daemon HTTP: POST `/chart` (→ `markdown` + `csv`), GET `/health`. Auto-cierre tras inactividad (default 3600 s). |
-| `ocr_server.py` | **Daemon de texto + visión IA:** POST `/ocr` (textos + `missing`/`all_found`), POST `/ask` (pregunta en lenguaje natural, 4 motores), GET `/health`. |
+| `ocr_server.py` | **Servicio unificado de OCR + visión IA + chart** (puerto canónico 8131): POST `/ocr` (textos + `missing`/`all_found`), POST `/ask` (pregunta en lenguaje natural, 4 motores), POST `/chart` (tabla de gráfico → markdown+csv), POST `/vision` (multi-modo), GET `/health`. Modelos perezosos; `--timeout 0` = servicio permanente; límite de cuerpo 1 MB. |
 | `ocr_verify.py` | Verificación visual de textos esperados en una captura (PP-OCRv6 / PaddleOCR-VL) + `--ask` con DocUnderstanding. Funciones reutilizables (`crear_modelo_ocr`, `predecir_textos`, `preguntar`...). |
 | `vision360.py` | **Visión 360 híbrida:** Set-of-Marks + verdad de campo DOM + QA VLM por recortes. `python vision360.py --image shot.png --regions regions.json --engine ollama`. |
 | `setup-ocr.ps1` | **Setup Windows del venv** (Python 3.11-3.13): crea `.venv-ocr` con paddlepaddle==3.3.1 + paddleocr[doc-parser]==3.7.0. |
@@ -63,6 +63,9 @@ que solo se incluyen las adaptaciones OCR aquí contenidas).
 | `tests/` | Pruebas unitarias (stdlib + pandas + pillow, sin paddleocr): extracción, cascada, vision, batería 360, ocr_server y vision360. |
 | `scripts/verificar-proyecto.ps1` | **Verificación local completa** (port Windows del .sh upstream): sintaxis, tests, reglas P0/P1, config, seguridad y repo. |
 | `scripts/hooks/pre-commit` | Hook git local (instalación: `cp scripts/hooks/pre-commit .git/hooks/pre-commit`). |
+| `scripts/ollama_compartida.ps1` | Estado/aplicación de la config de la instancia única de Ollama (envs, reinicio idempotente, limpieza de huérfanos). |
+| `scripts/servicio-ollama.ps1` | Servicio único de Ollama (puerto 11434): tarea ONLOGON con fallback HKCU Run; `-Instalar`/`-Iniciar`/`-Detener`/`-Estado`/`-Verificar`. |
+| `scripts/servicio-vision.ps1` | Servicio único del daemon `ocr_server.py` (puerto 8131, `--timeout 0`): tarea ONLOGON; `-Instalar`/`-Iniciar`/`-Detener`/`-Estado`. |
 | `scripts/bateria_360.py` | Batería 360°: compara VLM locales (docbee / ollama) en 6 dimensiones; scoring automático + rúbrica humana. |
 | `scripts/benchmark_ocr.py` | Benchmark de motores (ChartParsing / PP-StructureV3 / PP-OCRv6 / PP-OCRv5): carga, inferencia, RAM, puntuación. |
 | `scripts/generar_charts.py` | Genera gráficos de prueba con datos CONOCIDOS + CSV de referencia (ground truth). |
@@ -95,10 +98,12 @@ curl -X POST http://127.0.0.1:8080/chart -H "Content-Type: application/json" -d 
 .venv-ocr\Scripts\python.exe foto.png --modo objetos          # RT-DETR: frutas/personas...
 .venv-ocr\Scripts\python.exe imagen.png                       # auto: clasifica y rutea
 
-# 3d. OCR de texto + visión IA por daemon
-.venv-ocr\Scripts\python.exe ocr_server.py --port 8081
-curl -X POST http://127.0.0.1:8081/ocr -H "Content-Type: application/json" -d "{\"image\": \"shot.png\", \"expected\": [\"DH001\"]}"
-curl -X POST http://127.0.0.1:8081/ask -H "Content-Type: application/json" -d "{\"image\": \"shot.png\", \"query\": \"Cuantos paneles hay?\", \"engine\": \"ollama\"}"
+# 3d. Servicio unico: OCR + vision IA + chart por daemon (un solo puerto 8131)
+.venv-ocr\Scripts\python.exe ocr_server.py --port 8131
+curl -X POST http://127.0.0.1:8131/ocr -H "Content-Type: application/json" -d "{\"image\": \"shot.png\", \"expected\": [\"DH001\"]}"
+curl -X POST http://127.0.0.1:8131/ask -H "Content-Type: application/json" -d "{\"image\": \"shot.png\", \"query\": \"Cuantos paneles hay?\", \"engine\": \"ollama\"}"
+curl -X POST http://127.0.0.1:8131/chart -H "Content-Type: application/json" -d "{\"image\": \"ejemplos/grafico_demo.png\"}"
+curl -X POST http://127.0.0.1:8131/vision -H "Content-Type: application/json" -d "{\"image\": \"foto.png\", \"modo\": \"objetos\"}"
 
 # 3e. Vision 360 híbrida (SoM + DOM + QA por regiones)
 .venv-ocr\Scripts\python.exe vision360.py --image shot.png --regions regions.json --engine ollama --ask-regions 1 3
@@ -150,8 +155,12 @@ paquete, drilling-visualization y multistat — **no** arrancar una por proyecto
 - **Cuidado al matar la app:** pueden quedar procesos `llama-server` huérfanos
   (padre muerto) que retienen la RAM de los modelos; `ollama_compartida.ps1 -Apply`
   los detecta y limpia (verificado: 1.2 → 4.6 GB libres en este host).
-- **Servicios:** `ocr_server.py` (`--ask-engine ollama|gemma3`) y `chart_server.py`
-  delegan en la instancia compartida; no hay que configurar nada más.
+- **Servicios:** `ocr_server.py` es el **servicio unificado** en el puerto
+  canónico `127.0.0.1:8131` (POST /ocr, /ask, /chart y /vision; `--timeout 0` =
+  servicio permanente) y delega los motores Ollama (`--ask-engine ollama|gemma3`)
+  en la instancia compartida. `chart_server.py` queda como CLI legacy.
+  Autostart y gestión: `scripts/servicio-ollama.ps1` y `scripts/servicio-vision.ps1`
+  (tarea ONLOGON, fallback HKCU Run; `-Iniciar`/`-Detener`/`-Estado`).
 
 ## Pruebas
 
