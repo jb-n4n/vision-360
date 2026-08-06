@@ -42,6 +42,21 @@ class ModeloVisionFalso:
         yield {"parsing_res_list": [{"content": self.respuesta}]}
 
 
+class ResultadoChartFalso:
+    """Objeto Result de PaddleX simulado para ChartParsing (solo .json)."""
+
+    def __init__(self, markdown):
+        self.json = {"res": {"image": "x.png", "result": markdown}}
+
+
+class ModeloChartFalso:
+    """Simula ChartParsing.predict(): devuelve una tabla markdown con separador."""
+
+    def predict(self, entrada):
+        time.sleep(0.05)
+        return [ResultadoChartFalso("| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |")]
+
+
 class TestOcrServer(unittest.TestCase):
     PUERTO = 8126
     BASE = f"http://127.0.0.1:{PUERTO}"
@@ -51,6 +66,7 @@ class TestOcrServer(unittest.TestCase):
         cls.estado = {
             "ocr": ModeloOcrFalso(["DH001", "Au_PPM", "Perfiles"]),
             "vision": ModeloVisionFalso("Sí, se ven varios paneles."),
+            "chart": ModeloChartFalso(),
             "lang": "es",
             "inicio": time.time(),
             "ultima_actividad": time.time(),
@@ -85,6 +101,39 @@ class TestOcrServer(unittest.TestCase):
         self.assertEqual(cuerpo["status"], "ok")
         self.assertIn("PP-OCRv6", cuerpo["modelos"][0])
         self.assertIn("PP-DocBee", cuerpo["modelos"][1])
+        self.assertIn("graficos", cuerpo["modos"])
+
+    def test_chart_ok(self):
+        codigo, cuerpo = self._req("/chart", {"image": IMAGEN})
+        self.assertEqual(codigo, 200)
+        self.assertTrue(cuerpo["ok"])
+        self.assertEqual(cuerpo["filas"], 2)
+        self.assertIn("| A |", cuerpo["markdown"])
+        self.assertIn("A,B", cuerpo["csv"])
+
+    def test_vision_modo_invalido(self):
+        codigo, cuerpo = self._req("/vision", {"image": IMAGEN, "modo": "invalido"})
+        self.assertEqual(codigo, 400)
+        self.assertIn("modo invalido", cuerpo["error"])
+
+    def test_cuerpo_demasiado_grande(self):
+        r = urllib.request.Request(
+            self.BASE + "/ocr",
+            data=json.dumps({"image": "x" * (ocr_server.MAX_CUERPO + 1024)}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(r) as resp:
+                codigo, cuerpo = resp.status, json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            codigo, cuerpo = e.code, json.loads(e.read().decode())
+        self.assertEqual(codigo, 413)
+        self.assertIn("demasiado grande", cuerpo["error"])
+
+    def test_falta_clave_image(self):
+        codigo, cuerpo = self._req("/ocr", {"otra": "clave"})
+        self.assertEqual(codigo, 400)
+        self.assertIn("image", cuerpo["error"])
 
     def test_ocr_todos_encontrados(self):
         codigo, cuerpo = self._req("/ocr", {"image": IMAGEN, "expected": ["DH001", "Au_PPM"]})

@@ -216,10 +216,21 @@ def combinar_lineas(principales: list[LineaTexto], banda: list[LineaTexto],
 
 
 def extraer_texto(imagen: str, ocr_version: str = "PP-OCRv6") -> list[LineaTexto]:
-    """Modo texto: líneas reconocidas con bbox y score (PP-OCRv6)."""
+    """Modo texto: líneas reconocidas con bbox y score (PP-OCRv6).
+
+    Flags de orientacion/deswarpe desactivados (misma convencion que
+    ocr_verify.py): evita rotaciones del pipeline que desalinean los bboxes
+    con el marco de la imagen y recorta el tiempo de CPU."""
     from paddleocr import PaddleOCR  # import perezoso
 
-    model = PaddleOCR(device="cpu", enable_mkldnn=False, ocr_version=ocr_version)
+    model = PaddleOCR(
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        enable_mkldnn=False,
+        device="cpu",
+        ocr_version=ocr_version,
+    )
     res = model.predict(imagen)
     res_json = res[0].json.get("res", {})
     textos = res_json.get("rec_texts", [])
