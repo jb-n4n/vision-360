@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv-ocr/
+venv/
+env/
+
+# Perfil local por máquina (no se versiona; ver better_ocr.json.example)
+better_ocr.json
+
+# Salidas generadas por los scripts
+salida_bruta.json
+datos_extraidos.csv
+ocr_salida_bruta.json
+ocr_texto_extraido.txt
+vision_salida_bruta.json
+vision_respuesta.txt
+*.som.png
+*.crop*.png
+ocr_resized.png
+
+# Salidas de la batería 360° y benchmarks
+salida/
+*.reporte.json

@@ -1,0 +1,26 @@
+Copyright (C) 2026 — Geoblast (programador del proyecto vision-360)
+
+Este paquete es un fork adaptado de:
+
+  - jmbigi/better-ocr (https://github.com/jmbigi/better-ocr) — CC BY-SA 4.0
+  - jmbigi/better-ai  (https://github.com/jmbigi/better-ai)  — CC BY-SA 4.0
+
+El código heredado de esos proyectos se distribuye bajo **Creative Commons
+Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)**, texto oficial en:
+
+  https://creativecommons.org/licenses/by-sa/4.0/legalcode
+
+Resumen de términos (no sustituye el texto legal):
+
+  - Atribución (BY): se debe reconocer el autor original (jmbigi) y este paquete
+    al redistribuir o adaptar el contenido.
+  - ShareAlike (SA): cualquier obra derivada debe distribuirse bajo la misma
+    licencia CC BY-SA 4.0 (o compatible).
+
+Parte de los scripts incorporados (ocr_server.py, ocr_verify.py, vision360.py,
+chart_ocr.py, setup-ocr.ps1) provienen del proyecto drilling-visualization
+(Nex4Nova), adaptados e integrados aquí por su programador; la licencia de esas
+adaptaciones sigue los términos CC BY-SA 4.0 del código heredado que contienen.
+
+Las dependencias de terceros (paddlepaddle, paddleocr, pandas, pillow, etc.)
+conservan sus propias licencias.

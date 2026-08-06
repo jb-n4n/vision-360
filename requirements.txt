@@ -1,0 +1,19 @@
+# Dependencias del paquete central vision-360 (better-ocr, CC BY-SA 4.0)
+#
+# Instalar con:  pip install -r requirements.txt
+# En Linux (CPU) se recomienda el índice oficial:
+#       pip install paddlepaddle==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+# En Windows, PyPI ya trae wheels CPU.
+# En GPU: paddlepaddle-gpu==3.3.1 desde -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+#
+# Entorno validado: Linux CPU (Python 3.11/3.12) y Windows (Python 3.11-3.13),
+# PaddlePaddle 3.3.1, PaddleOCR 3.7.0.
+#
+# Para SOLO ejecutar los tests unitarios (sin inferencia) basta:
+#   pip install pandas pillow
+# El setup completo del venv en Windows:  powershell -ExecutionPolicy Bypass -File setup-ocr.ps1
+
+paddlepaddle==3.3.1
+paddleocr[doc-parser]==3.7.0
+pandas>=2.0
+pillow>=10.0

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Hook pre-commit LOCAL (sin dependencias de GitHub/CI).
+# Instalación (Windows + Git for Windows):  cp scripts/hooks/pre-commit .git/hooks/pre-commit
+# Verifica reglas, config y seguridad antes de cada commit.
+set -u
+cd "$(dirname "$0")/../.." || exit 1
+# El verificador nativo de este paquete es PowerShell (port de verificar-proyecto.sh).
+if command -v pwsh >/dev/null 2>&1; then
+  pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verificar-proyecto.ps1 --pre-commit
+elif command -v powershell >/dev/null 2>&1; then
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verificar-proyecto.ps1 --pre-commit
+else
+  echo "ERROR: ni pwsh ni powershell disponibles para verificar-proyecto.ps1"
+  exit 1
+fi
