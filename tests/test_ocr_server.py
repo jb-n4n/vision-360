@@ -324,6 +324,38 @@ class TestColaYAsync(unittest.TestCase):
         self.assertEqual(codigo, 404)
 
 
+class TestHandleError(unittest.TestCase):
+    """handle_error: resets de conexion -> 1 linea INFO; otros errores -> ERROR."""
+
+    @staticmethod
+    def _instancia():
+        estado = {"lang": "es", "inicio": time.time(),
+                  "ultima_actividad": time.time(), "ocupado": False}
+        servicio = ocr_server.ServicioCola(estado)
+        return object.__new__(ocr_server.crear_handler(estado, servicio))
+
+    def test_reset_loguea_info_una_linea(self):
+        h = self._instancia()
+        with mock.patch("ocr_server.LOG") as log:
+            try:
+                raise ConnectionResetError(10054, "test")
+            except ConnectionResetError:
+                h.handle_error("sock", ("127.0.0.1", 1))
+        log.info.assert_called_once()
+        log.error.assert_not_called()
+        self.assertIn("cerro la conexion", log.info.call_args[0][0])
+
+    def test_error_generico_loguea_error(self):
+        h = self._instancia()
+        with mock.patch("ocr_server.LOG") as log:
+            try:
+                raise ValueError("boom")
+            except ValueError:
+                h.handle_error("sock", ("127.0.0.1", 1))
+        log.error.assert_called_once()
+        log.info.assert_not_called()
+
+
 class TestServicioCola(unittest.TestCase):
     """Tests unitarios de la cola (sin HTTP): serializacion y espera."""
 

@@ -59,6 +59,7 @@ import socket
 import sys
 import threading
 import time
+import traceback
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -431,6 +432,18 @@ def crear_handler(estado, servicio):
     class OcrHandler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             LOG.info("peticion %s: %s", self.address_string(), fmt % args)
+
+        def handle_error(self, request, client_address):
+            """Logs de un solo renglon: una conexion que el cliente corta sin
+            enviar peticion (ConnectionResetError, WinError 10054) es ruido
+            normal de sondeos/monitores, no un fallo del servicio."""
+            exc = sys.exc_info()[1]
+            tipo = "".join(traceback.format_exception_only(*sys.exc_info()[:2])).strip()
+            if isinstance(exc, ConnectionResetError):
+                LOG.info("cliente %s cerro la conexion sin peticion (%s)",
+                         client_address[0], tipo)
+            else:
+                LOG.error("error en la peticion de %s: %s", client_address[0], tipo)
 
         def _enviar_json(self, codigo, datos):
             cuerpo = json.dumps(datos, ensure_ascii=False).encode("utf-8")
