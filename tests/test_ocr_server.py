@@ -24,11 +24,12 @@ IMAGEN = __file__
 class ModeloOcrFalso:
     """Simula PP-OCRv6.predict(): devuelve paginas con 'rec_texts'."""
 
-    def __init__(self, textos):
+    def __init__(self, textos, lento=0.05):
         self.textos = textos
+        self.lento = lento
 
     def predict(self, image_path):
-        time.sleep(0.05)
+        time.sleep(self.lento)
         yield {"rec_texts": list(self.textos)}
 
 
@@ -95,7 +96,8 @@ class TestOcrServer(unittest.TestCase):
             "ultima_actividad": time.time(),
             "ocupado": False,
         }
-        cls.server = HTTPServer(("127.0.0.1", cls.PUERTO), ocr_server.crear_handler(cls.estado))
+        cls.servicio = ocr_server.ServicioCola(cls.estado)
+        cls.server = HTTPServer(("127.0.0.1", cls.PUERTO), ocr_server.crear_handler(cls.estado, cls.servicio))
         cls.hilo = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.hilo.start()
         threading.Thread(target=ocr_server.vigia, args=(cls.server, cls.estado, 60), daemon=True).start()
@@ -220,6 +222,157 @@ class TestOcrServer(unittest.TestCase):
     def test_ruta_desconocida(self):
         codigo, _ = self._req("/otra")
         self.assertEqual(codigo, 404)
+
+
+class TestColaYAsync(unittest.TestCase):
+    """Cola de trabajos: serializacion, /health instantaneo, async + polling.
+
+    Modelos lentos (0.4 s) para poder observar el estado de la cola sin
+    depender de la velocidad del host.
+    """
+
+    PUERTO = 8128
+    BASE = f"http://127.0.0.1:{PUERTO}"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.estado = {
+            "ocr": ModeloOcrFalso(["DH001"], lento=0.4),
+            "vision": None,
+            "chart": None,
+            "lang": "es",
+            "inicio": time.time(),
+            "ultima_actividad": time.time(),
+            "ocupado": False,
+        }
+        cls.servicio = ocr_server.ServicioCola(cls.estado)
+        cls.server = HTTPServer(("127.0.0.1", cls.PUERTO), ocr_server.crear_handler(cls.estado, cls.servicio))
+        cls.hilo = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.hilo.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.hilo.join(timeout=2)
+        cls.server.server_close()
+
+    def _req(self, ruta, datos=None):
+        r = urllib.request.Request(
+            self.BASE + ruta,
+            data=json.dumps(datos).encode() if datos else None,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(r) as resp:
+                return resp.status, json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read().decode())
+
+    def test_health_instantaneo_durante_inferencia(self):
+        """El servidor HTTP nunca se bloquea con la inferencia: /health
+        responde en milisegundos aunque un trabajo lento este en curso."""
+        codigo, _ = self._req("/ocr", {"image": IMAGEN, "async": True})
+        self.assertEqual(codigo, 202)
+        with mock.patch("ocr_server.ollama_disponible", return_value=True):
+            t0 = time.time()
+            codigo, cuerpo = self._req("/health")
+            lapso = time.time() - t0
+        self.assertEqual(codigo, 200)
+        self.assertEqual(cuerpo["status"], "ok")
+        self.assertLess(lapso, 0.3, f"/health tardo {lapso:.2f}s durante la inferencia")
+
+    def test_async_polling_hasta_resultado(self):
+        codigo, cuerpo = self._req("/ocr", {"image": IMAGEN, "async": True,
+                                            "expected": ["DH001"]})
+        self.assertEqual(codigo, 202)
+        job_id = cuerpo["job_id"]
+        self.assertTrue(job_id)
+        self.assertIn("/resultado/", cuerpo["resultado"])
+
+        resultado = None
+        for _ in range(40):  # 40 x 0.1s = 4s >> 0.4s del modelo lento
+            codigo, cuerpo = self._req("/resultado/" + job_id)
+            if codigo == 200:
+                resultado = cuerpo
+                break
+            self.assertIn(cuerpo["estado"], ("en_cola", "en_curso"))
+            time.sleep(0.1)
+        self.assertIsNotNone(resultado, "el trabajo no termino a tiempo")
+        self.assertTrue(resultado["resultado"]["ok"])
+        self.assertTrue(resultado["resultado"]["all_found"])
+
+    def test_sync_timeout_503_con_job_id(self):
+        """Espera sincrona agotada -> 503 con job_id recuperable por polling."""
+        # Ocupa el worker con un trabajo lento primero.
+        self._req("/ocr", {"image": IMAGEN, "async": True})
+        codigo, cuerpo = self._req("/ocr", {"image": IMAGEN, "espera_s": 0.05})
+        self.assertEqual(codigo, 503)
+        self.assertIn("job_id", cuerpo)
+        self.assertIn("/resultado/", cuerpo["sugerencia"])
+
+        # Recuperacion: el trabajo termina y /resultado lo devuelve.
+        for _ in range(40):
+            codigo, cuerpo = self._req("/resultado/" + cuerpo["job_id"])
+            if codigo == 200:
+                self.assertTrue(cuerpo["resultado"]["ok"])
+                return
+            time.sleep(0.1)
+        self.fail("el trabajo 503 no se recupero por polling")
+
+    def test_resultado_desconocido_404(self):
+        codigo, _ = self._req("/resultado/inexistente")
+        self.assertEqual(codigo, 404)
+
+
+class TestServicioCola(unittest.TestCase):
+    """Tests unitarios de la cola (sin HTTP): serializacion y espera."""
+
+    def test_serializa_trabajos(self):
+        estado = {"ultima_actividad": time.time(), "ocupado": False}
+        servicio = ocr_server.ServicioCola(estado)
+        orden = []
+
+        def fabrica(n):
+            def fn(_estado):
+                time.sleep(0.05)
+                orden.append(n)
+                return {"n": n}
+            return fn
+
+        jobs = [servicio.enviar("t", fabrica(n)) for n in range(3)]
+        self.assertEqual(len(jobs), 3)
+        for j in jobs:
+            self.assertTrue(servicio.esperar(j, 5))
+        self.assertEqual(orden, [0, 1, 2])  # FIFO y serializado
+
+    def test_espera_agotada_devuelve_false(self):
+        estado = {"ultima_actividad": time.time(), "ocupado": False}
+        servicio = ocr_server.ServicioCola(estado)
+        j = servicio.enviar("t", lambda e: (time.sleep(0.2), {"ok": True})[1])
+        self.assertFalse(servicio.esperar(j, 0.05))
+        self.assertTrue(servicio.esperar(j, 5))
+        self.assertEqual(servicio.resumen(trabajo=j)["estado"], "ok")
+
+    def test_estado_muestra_cola_y_resultado(self):
+        estado = {"ultima_actividad": time.time(), "ocupado": False}
+        servicio = ocr_server.ServicioCola(estado)
+        j = servicio.enviar("ocr", lambda e: {"ok": True, "texts": ["a"]})
+        self.assertTrue(servicio.esperar(j, 5))
+        resumen = servicio.resumen(job_id=j.job_id)
+        self.assertEqual(resumen["estado"], "ok")
+        self.assertEqual(resumen["tipo"], "ocr")
+        self.assertEqual(resumen["resultado"]["texts"], ["a"])
+        self.assertIn("en_cola", resumen)
+        self.assertIn("en_curso", resumen)
+
+    def test_resultados_acotados(self):
+        estado = {"ultima_actividad": time.time(), "ocupado": False}
+        servicio = ocr_server.ServicioCola(estado, max_resultados=2)
+        jobs = [servicio.enviar("t", lambda e, i=i: {"ok": True, "i": i}) for i in range(3)]
+        for j in jobs:
+            self.assertTrue(servicio.esperar(j, 5))
+        self.assertEqual(servicio.resumen(job_id=jobs[0].job_id), {})  # expirado
+        self.assertIn("job_id", servicio.resumen(job_id=jobs[2].job_id))
 
 
 if __name__ == "__main__":
