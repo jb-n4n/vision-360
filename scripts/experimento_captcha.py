@@ -8,20 +8,19 @@ un reto de seleccion de celdas mostrado en un navegador.
 Diseno:
   - NAVEGADOR TEMPORAL: Playwright con contexto FRESCO (browser.new_context()
     sin perfil, sin cookies, nada persistente); se cierra y descarta al final.
-  - Pagina de demostracion LOCAL (file://, sin red): cuadricula 3x3 con una
-    foto en una celda y celdas clicables; el JS de la pagina valida la
-    seleccion ("CORRECTO"/"INCORRECTO").
+  - Modo REAL (default, decision del programador): abre el demo oficial de
+    reCAPTCHA v2, clickea el checkbox "I'm not a robot", espera el reto en su
+    iframe (bframe), lee la instruccion desde el DOM (fallback OCR), captura
+    la cuadricula, la resuelve y CLICKEA las celdas + VERIFY.
+  - Modo --local: pagina sintetica 3x3 (file://, sin red) con validacion JS.
   - Pipeline de resolucion (daemon 127.0.0.1:8131):
-      1. RT-DETR (POST /vision modo=objetos) sobre la captura -> celdas con
-         objeto, umbral de score.
-      2. VLM + SoM (POST /ask engine=ollama) sobre la captura numerada ->
-         numero(s) de celda que menciona el modelo.
-      3. Fusion simple: union de ambas; si difieren, se reportan ambas.
-  - Clic en las celdas elegidas dentro del navegador temporal + veredicto.
+      1. RT-DETR (POST /vision modo=objetos) -> celdas con objeto COCO.
+      2. VLM + SoM (POST /ask engine=ollama) -> numeros de celda que menciona.
+      3. Fusion simple: VLM decide; el detector apoya si el VLM no responde.
 
 Uso:
-  .venv-ocr/Scripts/python.exe scripts/experimento_captcha.py          # REAL por defecto: demo oficial reCAPTCHA v2
-  .venv-ocr/Scripts/python.exe scripts/experimento_captcha.py --local  # demo sintetica local (determinista, sin red)
+  .venv-ocr/Scripts/python.exe scripts/experimento_captcha.py          # REAL por defecto
+  .venv-ocr/Scripts/python.exe scripts/experimento_captcha.py --local  # demo sintetica
 
 NOTA (decision del programador): el modo REAL es el comportamiento por
 defecto por decision explicita del responsable del proyecto. --local genera
@@ -44,6 +43,15 @@ DAEMON = "http://127.0.0.1:8131"
 FOTO = Path(__file__).resolve().parent.parent / "ejemplos" / "test_charts" / "foto_personas.jpg"
 UMBRAL_RTDETR = 0.6
 TEMP = Path(tempfile.gettempdir()) / "opencode"
+
+# Objetos clasicos de reCAPTCHA v2 que RT-DETR-L (COCO 80) puede detectar.
+MAPEO_COCO = {
+    "fire hydrant": "fire hydrant", "traffic light": "traffic light",
+    "bus": "bus", "bicycle": "bicycle", "car": "car", "motorcycle": "motorcycle",
+    "boat": "boat", "truck": "truck", "train": "train", "person": "person",
+    "stop sign": "stop sign", "bench": "bench", "airplane": "airplane",
+    "crosswalk": None, "stairs": None, "mountains": None,  # solo VLM
+}
 
 
 def _html_demo() -> Path:
@@ -93,8 +101,8 @@ def _post(ruta, datos):
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _som(grid, out):
-    """Numeros rojos sobre las 9 celdas (Set-of-Marks)."""
+def _som(grid, out, n=3):
+    """Numeros rojos sobre las celdas (Set-of-Marks). n = 3 (3x3) o 4 (4x4)."""
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.open(grid).convert("RGB")
@@ -104,20 +112,21 @@ def _som(grid, out):
     except TypeError:
         font = ImageFont.load_default()
     w, h = img.size
-    cw, ch = w // 3, h // 3
-    n = 1
-    for r in range(3):
-        for c in range(3):
+    cw, ch = w // n, h // n
+    num = 1
+    for r in range(n):
+        for c in range(n):
             x0, y0 = c * cw, r * ch
             d.rectangle([x0, y0, x0 + cw, y0 + ch], outline=(255, 0, 0), width=3)
-            d.text((x0 + 6, y0 + 4), str(n), fill=(255, 0, 0), font=font)
-            n += 1
+            d.text((x0 + 6, y0 + 4), str(num), fill=(255, 0, 0), font=font)
+            num += 1
     img.save(out)
     return out
 
 
-def _celdas_detector(grid):
-    """RT-DETR via daemon: celdas con objeto por encima del umbral."""
+def _celdas_detector(grid, clase=None, n=3):
+    """RT-DETR via daemon: celdas con objeto por encima del umbral.
+    Si `clase` no es None, solo cuenta detecciones de esa clase COCO."""
     from PIL import Image
 
     w, h = Image.open(grid).size
@@ -126,36 +135,206 @@ def _celdas_detector(grid):
     for d in res.get("detecciones", []):
         if d["score"] < UMBRAL_RTDETR:
             continue
+        if clase and d["clase"] != clase:
+            continue
         x1, y1, x2, y2 = d["bbox"]
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-        n = (int(cy) // (h // 3)) * 3 + (int(cx) // (w // 3)) + 1
-        celdas.setdefault(n, []).append((d["clase"], d["score"]))
+        num = (int(cy) // (h // n)) * n + (int(cx) // (w // n)) + 1
+        celdas.setdefault(num, []).append((d["clase"], d["score"]))
     return celdas
 
 
-def _celdas_vlm(grid):
-    """VLM + SoM via daemon: numeros que menciona el modelo."""
-    som = _som(grid, TEMP / "captcha_som.png")
+RE_NUMEROS = re.compile(r"\b(?:[1-9]|1[0-6])\b")  # celdas 1..9 (3x3) o 1..16 (4x4)
+
+
+def _celdas_vlm(grid, objeto, n=3):
+    """VLM + SoM via daemon: numeros de celda que menciona el modelo."""
+    som = _som(grid, TEMP / "captcha_som.png", n=n)
     res = _post("/ask", {
         "image": str(som),
-        "query": "Hay 9 celdas numeradas del 1 al 9 con marcos rojos. "
-                 "En una hay una persona. Responde SOLO con su numero.",
+        "query": (f"Hay {n * n} celdas numeradas del 1 al {n * n} con marcos rojos. "
+                  f"Selecciona TODAS las celdas que contienen {objeto}. "
+                  f"Responde SOLO con los numeros separados por coma."),
         "engine": "ollama",
     })
     texto = res.get("answer", "")
-    numeros = [int(m) for m in re.findall(r"\b[1-9]\b", texto)]
+    numeros = [int(m) for m in RE_NUMEROS.findall(texto) if int(m) <= n * n]
     return texto, numeros
 
 
-def resolver(grid):
-    """Resuelve la cuadricula y devuelve (celdas_elegidas, detalle)."""
-    detalle = {"detector": _celdas_detector(grid)}
-    texto, numeros = _celdas_vlm(grid)
+def resolver(grid, objeto_vlm, clase_rtdetr=None, n=3, usar_vlm=True):
+    """Resuelve la cuadricula y devuelve (celdas_elegidas, detalle).
+
+    Fusion: si el objeto es COCO (RT-DETR disponible) mandan las celdas del
+    detector (el VLM sobre-selecciona y tarda ~2-3 min: el reto real expira
+    en ~2 min); si no es COCO, mandan las del VLM."""
+    detalle = {"detector": _celdas_detector(grid, clase_rtdetr, n=n)}
+    if usar_vlm:
+        texto, numeros = _celdas_vlm(grid, objeto_vlm, n=n)
+    else:
+        texto, numeros = "(omitido: objeto COCO, detector suficiente)", []
     detalle["vlm"] = {"respuesta": texto, "numeros": numeros}
-    elegidas = set(numeros)
-    if not elegidas:
+    if clase_rtdetr:
         elegidas = set(detalle["detector"])
+    else:
+        elegidas = set(numeros)
+    if not elegidas:
+        elegidas = set(detalle["detector"]) or set(numeros)
     return sorted(elegidas), detalle
+
+
+# Plurales irregulares comunes de reCAPTCHA v2.
+PLURALES = {
+    "buses": "bus", "hydrants": "fire hydrant", "boxes": "box",
+    "crosswalks": "crosswalk", "bicycles": "bicycle", "trucks": "truck",
+    "boats": "boat", "cars": "car", "motorcycles": "motorcycle",
+    "trains": "train", "airplanes": "airplane", "benches": "bench",
+    "mountains": "mountain", "storefronts": "storefront",
+    "street signs": "street sign", "stop signs": "stop sign",
+}
+
+
+def _instruccion_a_objeto(texto):
+    """'Select all squares with buses' -> ('bus', clase COCO o None)."""
+    limpio = texto.strip().lower()
+    for prefijo in ("select all squares with", "select all images with",
+                    "select all tiles with", "select all pictures with",
+                    "selecciona todas las imagenes con", "seleccione las imagenes con",
+                    "marcar todas las imagenes con"):
+        if limpio.startswith(prefijo):
+            limpio = limpio[len(prefijo):].strip()
+            break
+    limpio = re.sub(r"^(a|an|the)\s+", "", limpio)  # "a fire hydrant" -> "fire hydrant"
+    # Recorte del texto accesorio que sigue al objeto en el DOM real, que
+    # viene CONCATENADO sin espacio ("traffic lightsIf there are none...").
+    limpio = re.split(r"if there are none|if none|click verify|once there are none",
+                      limpio, flags=re.IGNORECASE)[0]
+    limpio = limpio.rstrip(".").strip()
+    if not limpio:
+        return None, None
+    if limpio in MAPEO_COCO:
+        return limpio, MAPEO_COCO[limpio]
+    if limpio in PLURALES:
+        normalizado = PLURALES[limpio]
+        return normalizado, MAPEO_COCO.get(normalizado)
+    singular = re.sub(r"(?<=[a-z])s$", "", limpio)  # "traffic lights" -> "traffic light"
+    if singular in MAPEO_COCO:
+        return singular, MAPEO_COCO[singular]
+    return limpio, None  # no COCO: solo VLM
+
+
+def _reto_real(page):
+    """Loop completo contra el demo oficial: checkbox -> reto -> resolver -> clic."""
+    page.goto("https://www.google.com/recaptcha/api2/demo", timeout=60000)
+    print("Demo REAL de reCAPTCHA v2 abierto en navegador temporal.")
+
+    # 1. Click en el checkbox "I'm not a robot" (iframe ancla).
+    checkbox = page.frame_locator("iframe[src*='recaptcha']").get_by_role(
+        "checkbox", name="I'm not a robot")
+    checkbox.click(timeout=20000)
+    print("Checkbox clickeado. Esperando el reto...")
+
+    # 2. Reto en el iframe grande (bframe). El marcado real usa
+    #    table.rc-imageselect-table-33/-44 y td.rc-imageselect-tile.
+    frame = page.frame_locator("iframe[src*='bframe']")
+    frame.locator("table.rc-imageselect-table, td.rc-imageselect-tile, img.rc-image-tile").first.wait_for(timeout=30000)
+    print("Reto detectado en el iframe.")
+
+    # Tamano de la cuadricula: 3x3 (9 tiles) o 4x4 (16 tiles).
+    tabla = frame.locator("table.rc-imageselect-table-33, table.rc-imageselect-table-44, table.rc-imageselect-table").first
+    try:
+        n = 4 if "table-44" in (tabla.get_attribute("class") or "") else 3
+    except Exception:
+        n = 3
+    print(f"Cuadricula {n}x{n}.")
+
+    # 3. Instruccion desde el DOM (verdad de campo); fallback OCR.
+    objeto = None
+    for sel in ("div.rc-imageselect-desc-no-canonical",
+                "div.rc-imageselect-desc",
+                "div.rc-imageselect-instructions"):
+        try:
+            txt = frame.locator(sel).first.text_content(timeout=4000)
+            if txt and txt.strip():
+                objeto, clase = _instruccion_a_objeto(txt)
+                print(f"Instruccion (DOM): {txt.strip()!r} -> objeto={objeto!r} clase={clase!r}")
+                break
+        except Exception:
+            continue
+    if objeto is None:
+        page.screenshot(path=str(TEMP / "captcha_reto.png"), full_page=True)
+        res = _post("/ocr", {"image": str(TEMP / "captcha_reto.png")})
+        texto = " ".join(res.get("texts", []))
+        objeto, clase = _instruccion_a_objeto(texto)
+        print(f"Instruccion (OCR): {texto[:120]!r} -> objeto={objeto!r} clase={clase!r}")
+
+    # 4. Captura de la cuadricula (elemento tabla del iframe).
+    grid = TEMP / "captcha_reto_grid.png"
+    tabla.screenshot(path=str(grid))
+    print(f"captura de la cuadricula -> {grid}")
+
+    # 5. Resolucion. Objeto COCO -> solo RT-DETR (rapido, ~20 s: el reto real
+    #    expira en ~2 min); objeto no-COCO -> VLM (lento, riesgo de expirar).
+    objeto_vlm = ("una persona" if not objeto else ("un/a " + objeto))
+    usar_vlm = clase is None
+    elegidas, detalle = resolver(grid, objeto_vlm, clase_rtdetr=clase, n=n,
+                                 usar_vlm=usar_vlm)
+    print("\n== Resolucion del reto real ==")
+    for num, dets in detalle["detector"].items():
+        for c, score in dets:
+            print(f"  RT-DETR: celda {num} ({c}, score {score:.2f})")
+    print(f"  VLM SoM: {detalle['vlm']['respuesta']}")
+    print(f"  celdas elegidas: {elegidas}")
+
+    # 6. Clic en las celdas (mapeo por bbox: robusto al orden del DOM).
+    tiles = frame.locator("td.rc-imageselect-tile, table.rc-imageselect-table img.rc-image-tile")
+    tb = tabla.bounding_box()
+    n_tiles = tiles.count()
+    print(f"  tiles en el DOM: {n_tiles}")
+    for i in range(n_tiles):
+        bb = tiles.nth(i).bounding_box()
+        if not bb or not tb:
+            continue
+        col = round((bb["x"] - tb["x"]) / (tb["width"] / n))
+        row = round((bb["y"] - tb["y"]) / (tb["height"] / n))
+        num = row * n + col + 1
+        if num in elegidas:
+            # Click via JS: reCAPTCHA posiciona los tiles con transforms que
+            # dejan el elemento "fuera del viewport" para el click normal de
+            # Playwright; el click sintetico dispara el mismo handler del td.
+            tiles.nth(i).evaluate("el => el.click()")
+            print(f"  click (JS) en tile DOM[{i}] -> celda {num}")
+
+    # 7. VERIFY (click JS: mismo motivo que los tiles, transforms fuera de viewport).
+    boton = None
+    for sel in ("button#recaptcha-verify-button",
+                "div.rc-button-default", "button.rc-button-default"):
+        try:
+            loc = frame.locator(sel).first
+            if loc.count() and loc.is_visible():
+                boton = loc
+                break
+        except Exception:
+            continue
+    if boton is not None:
+        boton.evaluate("el => el.click()")
+        print("VERIFY clickeado (JS).")
+    else:
+        print("No se encontro el boton VERIFY (marcado puede no haber cambiado).")
+
+    # 8. Resultado real: el checkbox del ancla se marca como verificado si el
+    #    reto se acepto; si no, Google re-renderiza un reto nuevo.
+    page.wait_for_timeout(6000)
+    ancla = page.frame_locator("iframe[src*='recaptcha']")
+    verificada = ancla.locator("div.rc-anchor-checkbox-checked").count() > 0
+    captura = TEMP / "captcha_real_resultado.png"
+    page.screenshot(path=str(captura), full_page=True)
+    print(f"captura final -> {captura}")
+    if verificada:
+        print("RESULTADO: checkbox VERIFICADO (reto superado).")
+        return 0
+    print("RESULTADO: reto rechazado o re-renderizado (seguiria otro intento).")
+    return 1
 
 
 def main():
@@ -173,21 +352,10 @@ def main():
         page = context.new_page()
 
         if not args.local:
-            page.goto("https://www.google.com/recaptcha/api2/demo", timeout=60000)
-            print("Demo REAL de reCAPTCHA v2 abierto en navegador temporal.")
-            print("URL:", page.url)
             try:
-                checkbox = page.frame_locator("iframe[src*='recaptcha']").get_by_role(
-                    "checkbox", name="I'm not a robot")
-                checkbox.click(timeout=15000)
-                print("Checkbox 'I'm not a robot' clickeado (el reto real queda para la sesion siguiente).")
-            except Exception as exc:
-                print(f"No se pudo clickear el checkbox: {exc}")
-            page.wait_for_timeout(4000)
-            page.screenshot(path=str(TEMP / "captcha_real.png"), full_page=True)
-            print(f"captura -> {TEMP / 'captcha_real.png'}")
-            browser.close()
-            return 0
+                return _reto_real(page)
+            finally:
+                browser.close()  # temporal: nada persiste
 
         grid = TEMP / "captcha_grid.png"
         _html_demo()
@@ -196,11 +364,11 @@ def main():
         page.locator("#grid").screenshot(path=str(grid))
         print(f"captura de la cuadricula -> {grid}")
 
-        elegidas, detalle = resolver(grid)
-        print("\n== Resolucion ==")
+        elegidas, detalle = resolver(grid, "una persona", clase_rtdetr="person")
+        print("\n== Resolucion (demo local) ==")
         for n, dets in detalle["detector"].items():
-            for clase, score in dets:
-                print(f"  RT-DETR: celda {n} ({clase}, score {score:.2f})")
+            for c, score in dets:
+                print(f"  RT-DETR: celda {n} ({c}, score {score:.2f})")
         print(f"  VLM SoM: {detalle['vlm']['respuesta']}")
         print(f"  celdas elegidas: {elegidas}")
 
