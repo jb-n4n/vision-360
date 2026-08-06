@@ -58,9 +58,12 @@ function Test-InterpreteCorrecto {
 
 function Write-Estado {
     $tarea = Get-ScheduledTask -TaskName $TAREA -ErrorAction SilentlyContinue
+    $run = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' `
+        -Name $TAREA -ErrorAction SilentlyContinue
     $vivo = Test-ServicioVivo
     $procs = Get-ProcesoDaemon
     Write-Host "Autostart tarea : $TAREA -> $([bool]$tarea)"
+    Write-Host "Autostart HKCU  : $([bool]$run)"
     Write-Host "Puerto $PUERTO : $vivo"
     Write-Host "Procesos daemon: $($procs.Count) (PIDs: $($procs.ProcessId -join ', '))"
     if ($tarea) {
@@ -94,9 +97,15 @@ if ($Instalar) {
         Write-Host "Tarea creada. El daemon arranca al iniciar sesion (puerto $PUERTO)."
     } catch {
         Write-Host "Sin permisos para tarea programada ($($_.Exception.Message))."
-        Write-Host "Alternativa manual: inicia el daemon con scripts/servicio-vision.ps1 -Iniciar"
-        Write-Host "o con un acceso directo en la carpeta Inicio apuntando a:"
-        Write-Host "  $PY `"$DAEMON`" --port $PUERTO --timeout 0"
+        # Fallback sin admin: autostart HKCU Run (redirige logs a logs/)
+        $RUN_KEY = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+        $logOut = Join-Path $RAIZ 'logs\servicio-vision.out.log'
+        $logErr = Join-Path $RAIZ 'logs\servicio-vision.err.log'
+        New-Item -ItemType Directory -Force -Path (Split-Path $logOut) | Out-Null
+        $cmdLine = "`"$PY`" `"$DAEMON`" --port $PUERTO --timeout 0 --ask-engine ollama"
+        $cmdLine = "$cmdLine >> `"$logOut`" 2>> `"$logErr`""
+        Set-ItemProperty -Path $RUN_KEY -Name $TAREA -Type String -Value $cmdLine
+        Write-Host "Autostart HKCU Run creado ($TAREA). El daemon arranca al iniciar sesion."
     }
     Write-Host "Para arrancarla ahora: scripts/servicio-vision.ps1 -Iniciar"
 }
