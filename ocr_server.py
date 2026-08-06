@@ -589,6 +589,16 @@ def main():
                   "arrancar otra.", args.host, args.port)
         sys.exit(2)
 
+    # Guard de arranque: si este interprete no tiene paddleocr (p. ej. se lanzo
+    # el daemon con el python del sistema en vez de .venv-ocr\Scripts\python.exe),
+    # el daemon muere AQUI con un mensaje claro en lugar de fallar en la primera
+    # inferencia. find_spec es barato (no importa paddle).
+    try:
+        verificar_paddleocr()
+    except RuntimeError as exc:
+        LOG.error("%s", exc)
+        sys.exit(2)
+
     estado = {
         "ocr": None,
         "vision": None,
