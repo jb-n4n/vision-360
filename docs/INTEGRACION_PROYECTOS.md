@@ -71,6 +71,23 @@ install limpio sin el venv correspondiente).
 - Licencia: mantener la atribución CC BY-SA 4.0 en los headers y en el README
   del destino.
 
+## Instancia única de Ollama compartida
+
+Los proyectos con Visión IA 360 (vision-360, drilling-visualization, multistat)
+comparten **una sola instancia de Ollama** en `127.0.0.1:11434` — nunca una por
+proyecto. Ya es así por construcción:
+
+| Proyecto | Endpoint | Uso |
+|---|---|---|
+| vision-360 (`ocr_server.py`, `ocr_verify.py`) | `http://127.0.0.1:11434/api/chat` | motores `ollama`/`gemma3` |
+| drilling-visualization (idéntico) | `http://127.0.0.1:11434/api/chat` | QA de capturas e2e |
+| multistat (`descripcion_360.py`) | `http://localhost:11434/api/generate` | descripción 360 de paneles |
+
+Configuración recomendada (host 16 GB) y cómo aplicarla: ver `README.md`
+sección "Instancia única de Ollama compartida". Script idempotente:
+`scripts/ollama_compartida.ps1` (`-Check` estado / `-Apply` aplica + reinicia +
+limpia huérfanos `llama-server`).
+
 ## Checklist de integración
 
 - [ ] Imports robustos (package vs directo) probados en ambas rutas

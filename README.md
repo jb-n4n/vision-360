@@ -114,6 +114,45 @@ Cada equipo puede limitar los modos según su RAM, sin borrar código:
 
 RAM medida por modo (MB): texto 1000, graficos rápido 1000, graficos VLM 5200, doc 4500, objetos 900.
 
+## Instancia única de Ollama compartida (todos los proyectos)
+
+**Recomendación para optimizar la RAM local:** usar **UNA sola instancia de
+Ollama** en `127.0.0.1:11434` para TODOS los proyectos con Visión IA 360 — este
+paquete, drilling-visualization y multistat — **no** arrancar una por proyecto.
+
+- **Ya es la realidad:** los tres proyectos apuntan al mismo endpoint
+  (`ocr_verify.py`/`ocr_server.py` → `/api/chat`; `descripcion_360.py` →
+  `/api/generate`). Un solo daemon = un solo presupuesto de RAM controlable y
+  modelos compartidos (qwen2.5vl:3b, gemma3:4b, gemma4:e2b) sin duplicar.
+- **Configuración recomendada (host de 16 GB), como variables de entorno de
+  USUARIO** (en Windows Ollama las lee al iniciar; reinicia la app tras
+  cambiarlas):
+
+  | Variable | Valor | Efecto |
+  |---|---|---|
+  | `OLLAMA_MAX_LOADED_MODELS` | `2` | solo el par ligero en memoria (el default es 3, deja la RAM del host crítica) |
+  | `OLLAMA_KEEP_ALIVE` | `30m` | evita recargas a mitad de ejecución (el default de 5 min costó 26 min de recarga en un test real) |
+
+  Presupuesto de RAM con esta config: qwen2.5vl:3b (~2.7 GB) + gemma3:4b
+  (~3.3 GB) ≈ **6 GB en memoria**; gemma4:e2b (7.2 GB) se carga solo bajo
+  demanda y se descarga solo tras 30 min de inactividad.
+
+- **Aplicarla con un script** (idempotente, sin tocar el sistema):
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts/ollama_compartida.ps1          # estado
+  powershell -ExecutionPolicy Bypass -File scripts/ollama_compartida.ps1 -Apply   # aplica + reinicia + limpia
+  ```
+
+- **Liberar RAM de un modelo pesado** en cualquier momento: `ollama stop <modelo>`
+  o `keep_alive: 0` en la llamada (el parámetro `keep_alive` de la API sobreescribe
+  el default).
+- **Cuidado al matar la app:** pueden quedar procesos `llama-server` huérfanos
+  (padre muerto) que retienen la RAM de los modelos; `ollama_compartida.ps1 -Apply`
+  los detecta y limpia (verificado: 1.2 → 4.6 GB libres en este host).
+- **Servicios:** `ocr_server.py` (`--ask-engine ollama|gemma3`) y `chart_server.py`
+  delegan en la instancia compartida; no hay que configurar nada más.
+
 ## Pruebas
 
 ```powershell
