@@ -162,14 +162,56 @@ def _celdas_vlm(grid, objeto, n=3):
     return texto, numeros
 
 
+def _celdas_detector_por_celda(grid, clase=None, n=3, umbral=UMBRAL_RTDETR):
+    """RT-DETR por celda recortada y AMPLIADA 2x.
+
+    En la pasada de la cuadricula completa los objetos pequenos quedan bajo
+    resolucion (leccion: buses/bicicletas ~0.5-0.9 en tiles de 126 px). El
+    recorte por celda + LANCZOS 2x sube la resolucion del objeto y la
+    deteccion. Mas lento (n*n llamadas) pero cabe en la ventana de
+    expiracion del reto real (~2 min)."""
+    from PIL import Image
+
+    img = Image.open(grid).convert("RGB")
+    w, h = img.size
+    cw, ch = w // n, h // n
+    celdas = {}
+    for r in range(n):
+        for c in range(n):
+            num = r * n + c + 1
+            crop = img.crop((c * cw, r * ch, (c + 1) * cw, (r + 1) * ch))
+            crop = crop.resize((cw * 2, ch * 2), Image.LANCZOS)
+            tmp = TEMP / f"celda_{num}.png"
+            crop.save(tmp)
+            try:
+                res = _post("/vision", {"image": str(tmp), "modo": "objetos"})
+            except Exception as exc:
+                # Tolerancia: si una llamada falla (daemon reiniciado, corte),
+                # se salta esa celda en vez de tumbar el loop completo.
+                print(f"  celda {num}: error de deteccion ignorado ({exc})")
+                continue
+            for d in res.get("detecciones", []):
+                if d["score"] < umbral:
+                    continue
+                if clase and d["clase"] != clase:
+                    continue
+                celdas.setdefault(num, []).append((d["clase"], d["score"]))
+    return celdas
+
+
 def resolver(grid, objeto_vlm, clase_rtdetr=None, n=3, usar_vlm=True,
              umbral=UMBRAL_RTDETR):
     """Resuelve la cuadricula y devuelve (celdas_elegidas, detalle).
 
     Fusion: si el objeto es COCO (RT-DETR disponible) mandan las celdas del
-    detector (el VLM sobre-selecciona y tarda ~2-3 min: el reto real expira
-    en ~2 min); si no es COCO, mandan las del VLM."""
-    detalle = {"detector": _celdas_detector(grid, clase_rtdetr, n=n, umbral=umbral)}
+    detector por CELDA (recorte+2x: mas resolucion para objetos pequenos; el
+    VLM sobre-selecciona y tarda ~2-3 min: el reto real expira en ~2 min);
+    si no es COCO, mandan las del VLM."""
+    if clase_rtdetr:
+        detalle = {"detector": _celdas_detector_por_celda(grid, clase_rtdetr,
+                                                          n=n, umbral=umbral)}
+    else:
+        detalle = {"detector": _celdas_detector(grid, None, n=n, umbral=umbral)}
     if usar_vlm:
         texto, numeros = _celdas_vlm(grid, objeto_vlm, n=n)
     else:
@@ -196,7 +238,11 @@ PLURALES = {
 
 
 def _instruccion_a_objeto(texto):
-    """'Select all squares with buses' -> ('bus', clase COCO o None)."""
+    """'Select all squares with buses' -> ('bus', clase COCO o None, permite_skip).
+
+    permite_skip: True si la instruccion dice que se puede pasar sin marcar
+    nada ("If there are none, click skip")."""
+    permite_skip = "skip" in texto.lower()
     limpio = texto.strip().lower()
     for prefijo in ("select all squares with", "select all images with",
                     "select all tiles with", "select all pictures with",
@@ -212,16 +258,16 @@ def _instruccion_a_objeto(texto):
                       limpio, flags=re.IGNORECASE)[0]
     limpio = limpio.rstrip(".").strip()
     if not limpio:
-        return None, None
+        return None, None, permite_skip
     if limpio in MAPEO_COCO:
-        return limpio, MAPEO_COCO[limpio]
+        return limpio, MAPEO_COCO[limpio], permite_skip
     if limpio in PLURALES:
         normalizado = PLURALES[limpio]
-        return normalizado, MAPEO_COCO.get(normalizado)
+        return normalizado, MAPEO_COCO.get(normalizado), permite_skip
     singular = re.sub(r"(?<=[a-z])s$", "", limpio)  # "traffic lights" -> "traffic light"
     if singular in MAPEO_COCO:
-        return singular, MAPEO_COCO[singular]
-    return limpio, None  # no COCO: solo VLM
+        return singular, MAPEO_COCO[singular], permite_skip
+    return limpio, None, permite_skip  # no COCO: solo VLM
 
 
 def _reto_real(page):
@@ -251,14 +297,15 @@ def _reto_real(page):
 
     # 3. Instruccion desde el DOM (verdad de campo); fallback OCR.
     objeto = None
+    permite_skip = False
     for sel in ("div.rc-imageselect-desc-no-canonical",
                 "div.rc-imageselect-desc",
                 "div.rc-imageselect-instructions"):
         try:
             txt = frame.locator(sel).first.text_content(timeout=4000)
             if txt and txt.strip():
-                objeto, clase = _instruccion_a_objeto(txt)
-                print(f"Instruccion (DOM): {txt.strip()!r} -> objeto={objeto!r} clase={clase!r}")
+                objeto, clase, permite_skip = _instruccion_a_objeto(txt)
+                print(f"Instruccion (DOM): {txt.strip()!r} -> objeto={objeto!r} clase={clase!r} skip={permite_skip}")
                 break
         except Exception:
             continue
@@ -266,8 +313,8 @@ def _reto_real(page):
         page.screenshot(path=str(TEMP / "captcha_reto.png"), full_page=True)
         res = _post("/ocr", {"image": str(TEMP / "captcha_reto.png")})
         texto = " ".join(res.get("texts", []))
-        objeto, clase = _instruccion_a_objeto(texto)
-        print(f"Instruccion (OCR): {texto[:120]!r} -> objeto={objeto!r} clase={clase!r}")
+        objeto, clase, permite_skip = _instruccion_a_objeto(texto)
+        print(f"Instruccion (OCR): {texto[:120]!r} -> objeto={objeto!r} clase={clase!r} skip={permite_skip}")
 
     # 4. Captura de la cuadricula (elemento tabla del iframe).
     grid = TEMP / "captcha_reto_grid.png"
@@ -290,6 +337,24 @@ def _reto_real(page):
     print(f"  VLM SoM: {detalle['vlm']['respuesta']}")
     print(f"  celdas elegidas: {elegidas}")
 
+    # 5b. "If there are none, click skip": sin candidatos y la instruccion lo
+    #     permite -> SKIP en vez de marcar celdas (leccion: crosswalks real).
+    skip_usado = False
+    if not elegidas and permite_skip:
+        for sel in ("button#recaptcha-skip-button", "div.rc-button-skip",
+                    "button.rc-button-skip"):
+            try:
+                loc = frame.locator(sel).first
+                if loc.count() and loc.is_visible():
+                    loc.evaluate("el => el.click()")
+                    print("SKIP clickeado (JS): sin celdas con el objeto.")
+                    skip_usado = True
+                    break
+            except Exception:
+                continue
+        if not skip_usado:
+            print("Instruccion permite SKIP pero no se encontro el boton.")
+
     # 6. Clic en las celdas (mapeo por bbox: robusto al orden del DOM).
     tiles = frame.locator("td.rc-imageselect-tile, table.rc-imageselect-table img.rc-image-tile")
     tb = tabla.bounding_box()
@@ -309,22 +374,26 @@ def _reto_real(page):
             tiles.nth(i).evaluate("el => el.click()")
             print(f"  click (JS) en tile DOM[{i}] -> celda {num}")
 
-    # 7. VERIFY (click JS: mismo motivo que los tiles, transforms fuera de viewport).
-    boton = None
-    for sel in ("button#recaptcha-verify-button",
-                "div.rc-button-default", "button.rc-button-default"):
-        try:
-            loc = frame.locator(sel).first
-            if loc.count() and loc.is_visible():
-                boton = loc
-                break
-        except Exception:
-            continue
-    if boton is not None:
-        boton.evaluate("el => el.click()")
-        print("VERIFY clickeado (JS).")
+    # 7. VERIFY (click JS: mismo motivo que los tiles, transforms fuera de
+    #    viewport). Si ya se uso SKIP, no se clickea VERIFY.
+    if skip_usado:
+        print("SKIP ya enviado: no se clickea VERIFY.")
     else:
-        print("No se encontro el boton VERIFY (marcado puede no haber cambiado).")
+        boton = None
+        for sel in ("button#recaptcha-verify-button",
+                    "div.rc-button-default", "button.rc-button-default"):
+            try:
+                loc = frame.locator(sel).first
+                if loc.count() and loc.is_visible():
+                    boton = loc
+                    break
+            except Exception:
+                continue
+        if boton is not None:
+            boton.evaluate("el => el.click()")
+            print("VERIFY clickeado (JS).")
+        else:
+            print("No se encontro el boton VERIFY (marcado puede no haber cambiado).")
 
     # 8. Resultado real: el checkbox del ancla se marca como verificado si el
     #    reto se acepto; si no, Google re-renderiza un reto nuevo.
