@@ -296,6 +296,27 @@ def _instruccion_a_objeto(texto):
     return limpio, None, permite_skip  # no COCO: solo VLM
 
 
+def _diagnostico_botones(frame, max_elems=15):
+    """Imprime los botones/enlaces del bframe cuando el SKIP no se encuentra:
+    reCAPTCHA varia el marcado entre versiones y el selector actual no acierta
+    (pendiente 4, leccion 18). Solo diagnostico: no cambia el flujo."""
+    try:
+        candidatos = frame.locator("button, a, div[class*='button'], div[class*='rc-button']")
+        n = candidatos.count()
+        print(f"  diagnostico SKIP: {n} elementos button/a/div-button en el bframe:")
+        for i in range(min(n, max_elems)):
+            try:
+                info = candidatos.nth(i).evaluate(
+                    "e => ({tag: e.tagName, id: e.id, cls: e.className, "
+                    "txt: (e.textContent || '').trim().slice(0, 30), "
+                    "vis: !!(e.offsetWidth || e.offsetHeight)})")
+                print(f"    [{i}] {info}")
+            except Exception:
+                continue
+    except Exception as exc:
+        print(f"  diagnostico SKIP fallo: {exc}")
+
+
 def _ronda_reto(page):
     """Una ronda contra el reto real (dentro de un intento): detectar el reto
     en el iframe, leer la instruccion, capturar la cuadricula, resolverla,
@@ -397,6 +418,7 @@ def _ronda_reto(page):
                 continue
         if not skip_usado:
             print("Instruccion permite SKIP pero no se encontro el boton.")
+            _diagnostico_botones(frame)
 
     # 6. Clic en las celdas (mapeo por bbox: robusto al orden del DOM). Los
     #    tiles se buscan DENTRO de la tabla actual (.last): si se usaran todos
@@ -491,7 +513,13 @@ def _esperar_reto_nuevo(page, src_anterior=None, timeout=45000):
                 timeout=timeout)
         print("  re-render del reto detectado (nueva imagen de tiles).")
     except Exception as exc:
-        print(f"  aviso: no se detecto re-render del reto ({exc}); continuando.")
+        try:
+            src_actual = tile.evaluate("el => el.src")
+        except Exception:
+            src_actual = None
+        corto = lambda s: (str(s)[:64] + "...") if s else s
+        print(f"  aviso: no se detecto re-render del reto ({exc}); "
+              f"src_anterior={corto(viejo)} src_actual={corto(src_actual)}")
 
 
 def _loop_reto(max_intentos, ronda, esperar):
