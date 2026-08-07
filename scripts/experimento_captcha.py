@@ -270,17 +270,11 @@ def _instruccion_a_objeto(texto):
     return limpio, None, permite_skip  # no COCO: solo VLM
 
 
-def _reto_real(page):
-    """Loop completo contra el demo oficial: checkbox -> reto -> resolver -> clic."""
-    page.goto("https://www.google.com/recaptcha/api2/demo", timeout=60000)
-    print("Demo REAL de reCAPTCHA v2 abierto en navegador temporal.")
-
-    # 1. Click en el checkbox "I'm not a robot" (iframe ancla).
-    checkbox = page.frame_locator("iframe[src*='recaptcha']").get_by_role(
-        "checkbox", name="I'm not a robot")
-    checkbox.click(timeout=20000)
-    print("Checkbox clickeado. Esperando el reto...")
-
+def _ronda_reto(page):
+    """Una ronda contra el reto real (dentro de un intento): detectar el reto
+    en el iframe, leer la instruccion, capturar la cuadricula, resolverla,
+    clickear celdas + VERIFY (o SKIP) y devolver el veredicto real del ancla
+    (True si el checkbox quedo verificado)."""
     # 2. Reto en el iframe grande (bframe). El marcado real usa
     #    table.rc-imageselect-table-33/-44 y td.rc-imageselect-tile.
     frame = page.frame_locator("iframe[src*='bframe']")
@@ -403,7 +397,21 @@ def _reto_real(page):
     captura = TEMP / "captcha_real_resultado.png"
     page.screenshot(path=str(captura), full_page=True)
     print(f"captura final -> {captura}")
-    if verificada:
+    return verificada
+
+
+def _reto_real(page):
+    """Loop completo contra el demo oficial: checkbox -> reto -> resolver -> clic."""
+    page.goto("https://www.google.com/recaptcha/api2/demo", timeout=60000)
+    print("Demo REAL de reCAPTCHA v2 abierto en navegador temporal.")
+
+    # 1. Click en el checkbox "I'm not a robot" (iframe ancla).
+    checkbox = page.frame_locator("iframe[src*='recaptcha']").get_by_role(
+        "checkbox", name="I'm not a robot")
+    checkbox.click(timeout=20000)
+    print("Checkbox clickeado. Esperando el reto...")
+
+    if _ronda_reto(page):
         print("RESULTADO: checkbox VERIFICADO (reto superado).")
         return 0
     print("RESULTADO: reto rechazado o re-renderizado (seguiria otro intento).")
