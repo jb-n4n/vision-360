@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from scripts.experimento_captcha import (_loop_reto, _llamar_con_reintentos,
+                                         _celdas_detector,
                                          _celdas_detector_por_celda)
 
 
@@ -116,6 +117,58 @@ class TestCeldaPorCeldaConReintento(unittest.TestCase):
                  mock.patch("scripts.experimento_captcha.time.sleep"):
                 celdas = _celdas_detector_por_celda(grid, clase="person", n=1)
             self.assertEqual(celdas, {1: [("person", 0.8)]})
+
+
+class TestMapeoCeldas(unittest.TestCase):
+    """Regresion: el mapeo bbox->celda (pasada completa) usa coordenadas de la
+    imagen completa; la pasada por celda asigna SIEMPRE al numero del loop."""
+
+    def test_mapeo_bbox_a_celda_cuadricula_completa(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as d:
+            grid = Path(d) / "grid.png"
+            Image.new("RGB", (90, 90), "white").save(grid)
+            detecciones = [
+                {"clase": "bus", "score": 0.9, "bbox": [10, 10, 20, 20]},
+                {"clase": "bus", "score": 0.9, "bbox": [40, 40, 50, 50]},
+                {"clase": "bus", "score": 0.9, "bbox": [70, 70, 80, 80]},
+                {"clase": "bus", "score": 0.3, "bbox": [30, 30, 40, 40]},
+                {"clase": "person", "score": 0.9, "bbox": [30, 0, 40, 10]},
+            ]
+            with mock.patch("scripts.experimento_captcha._post",
+                            return_value={"detecciones": detecciones}):
+                celdas = _celdas_detector(grid, clase="bus", n=3, umbral=0.6)
+            # 1, 5 y 9 mapeadas por centro del bbox; 0.3 fuera de umbral y
+            # clase distinta descartadas.
+            self.assertEqual(celdas, {1: [("bus", 0.9)], 5: [("bus", 0.9)],
+                                      9: [("bus", 0.9)]})
+
+    def test_por_celda_asigna_al_numero_del_loop(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as d:
+            grid = Path(d) / "grid.png"
+            Image.new("RGB", (60, 60), "white").save(grid)
+            llamadas = []
+
+            def _post_fake(ruta, datos):
+                llamadas.append(1)
+                # La posicion del bbox DENTRO del recorte no cambia la celda:
+                # la pasada por celda asigna al numero del loop.
+                if len(llamadas) == 3:
+                    return {"detecciones": [{"clase": "bus", "score": 0.8,
+                                             "bbox": [2, 2, 8, 8]}]}
+                if len(llamadas) == 4:
+                    return {"detecciones": [{"clase": "bus", "score": 0.8,
+                                             "bbox": [52, 52, 58, 58]}]}
+                return {"detecciones": []}
+
+            with mock.patch("scripts.experimento_captcha._post",
+                            side_effect=_post_fake), \
+                 mock.patch("scripts.experimento_captcha.time.sleep"):
+                celdas = _celdas_detector_por_celda(grid, clase="bus", n=2)
+            self.assertEqual(celdas, {3: [("bus", 0.8)], 4: [("bus", 0.8)]})
 
 
 if __name__ == "__main__":
