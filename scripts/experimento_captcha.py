@@ -39,6 +39,7 @@ import json
 import re
 import sys
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -165,6 +166,26 @@ def _celdas_vlm(grid, objeto, n=3):
     return texto, numeros
 
 
+def _llamar_con_reintentos(llamar, num, intentos=2, espera_seg=3.0):
+    """Llama llamar() (callable -> respuesta JSON o excepcion) hasta
+    `intentos` veces, con `espera_seg` entre fallos. Devuelve la respuesta o
+    None si todos fallan (celda saltada).
+
+    Resistencia a reinicios del daemon (leccion 18, pendiente 3): el daemon
+    puede reiniciarse a mitad del loop n*n de celdas; un reintento corto por
+    celda deja que vuelva a estar operativo sin tumbar la resolucion."""
+    for intento in range(1, intentos + 1):
+        try:
+            return llamar()
+        except Exception as exc:
+            if intento < intentos:
+                print(f"  celda {num}: llamada {intento} fallo ({exc}); reintentando...")
+                time.sleep(espera_seg)
+            else:
+                print(f"  celda {num}: error de deteccion ignorado tras {intentos} intentos ({exc})")
+    return None
+
+
 def _celdas_detector_por_celda(grid, clase=None, n=3, umbral=UMBRAL_RTDETR):
     """RT-DETR por celda recortada y AMPLIADA 2x.
 
@@ -172,7 +193,9 @@ def _celdas_detector_por_celda(grid, clase=None, n=3, umbral=UMBRAL_RTDETR):
     resolucion (leccion: buses/bicicletas ~0.5-0.9 en tiles de 126 px). El
     recorte por celda + LANCZOS 2x sube la resolucion del objeto y la
     deteccion. Mas lento (n*n llamadas) pero cabe en la ventana de
-    expiracion del reto real (~2 min)."""
+    expiracion del reto real (~2 min). Cada llamada a /vision se reintenta
+    hasta 2 veces si el daemon se reinicia a mitad del loop (celda saltada
+    solo si ambas fallan)."""
     from PIL import Image
 
     img = Image.open(grid).convert("RGB")
@@ -186,12 +209,10 @@ def _celdas_detector_por_celda(grid, clase=None, n=3, umbral=UMBRAL_RTDETR):
             crop = crop.resize((cw * 2, ch * 2), Image.LANCZOS)
             tmp = TEMP / f"celda_{num}.png"
             crop.save(tmp)
-            try:
-                res = _post("/vision", {"image": str(tmp), "modo": "objetos"})
-            except Exception as exc:
-                # Tolerancia: si una llamada falla (daemon reiniciado, corte),
-                # se salta esa celda en vez de tumbar el loop completo.
-                print(f"  celda {num}: error de deteccion ignorado ({exc})")
+            res = _llamar_con_reintentos(
+                lambda: _post("/vision", {"image": str(tmp), "modo": "objetos"}),
+                num)
+            if res is None:
                 continue
             for d in res.get("detecciones", []):
                 if d["score"] < umbral:
