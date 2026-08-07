@@ -405,6 +405,7 @@ def _ronda_reto(page):
 
     # 7. VERIFY (click JS: mismo motivo que los tiles, transforms fuera de
     #    viewport). Si ya se uso SKIP, no se clickea VERIFY.
+    src_anterior = None
     if skip_usado:
         print("SKIP ya enviado: no se clickea VERIFY.")
     else:
@@ -419,6 +420,16 @@ def _ronda_reto(page):
             except Exception:
                 continue
         if boton is not None:
+            # src del tile actual ANTES del VERIFY: es la grid que se manda a
+            # revisar; _esperar_reto_nuevo la usa para detectar el re-render
+            # (capturado aqui, el cambio SI se ve; capturado despues de los
+            # 6 s de espera ya habria cambiado y el wait haria timeout,
+            # hallazgo 9).
+            try:
+                src_anterior = frame.locator("img.rc-image-tile").last.evaluate(
+                    "el => el.src")
+            except Exception:
+                src_anterior = None
             boton.evaluate("el => el.click()")
             print("VERIFY clickeado (JS).")
         else:
@@ -432,26 +443,30 @@ def _ronda_reto(page):
     captura = TEMP / "captcha_real_resultado.png"
     page.screenshot(path=str(captura), full_page=True)
     print(f"captura final -> {captura}")
-    return verificada
+    return verificada, src_anterior
 
 
-def _esperar_reto_nuevo(page, timeout=45000):
+def _esperar_reto_nuevo(page, src_anterior=None, timeout=45000):
     """Espera el re-render del reto tras un rechazo: el src absoluto del
-    primer tile de imagen cambia cuando Google re-renderiza la cuadricula.
-    Tolerante: si no se detecta el cambio, se continua con lo que haya."""
+    ULTIMO tile de imagen cambia cuando Google re-renderiza la cuadricula
+    (appendea una tabla nueva; la vieja queda en el DOM, hallazgo 9).
+
+    src_anterior: src capturado ANTES de clickear VERIFY (la grid actual);
+    si es None se captura aqui (caso: no hubo VERIFY). Tolerante: si no se
+    detecta el cambio, se continua con lo que haya."""
     frame = next((f for f in page.frames if "bframe" in (f.url or "")), None)
     if frame is None:
         print("  aviso: no se encontro el iframe bframe; continuando.")
         return
-    tile = frame.locator("img.rc-image-tile").first
+    tile = frame.locator("img.rc-image-tile").last
     try:
-        viejo = tile.evaluate("el => el.src")
+        viejo = src_anterior or tile.evaluate("el => el.src")
     except Exception:
         viejo = None
     try:
         if viejo:
             frame.wait_for_function(
-                "(src0) => { const t = document.querySelector('img.rc-image-tile'); return t && t.src !== src0; }",
+                "(src0) => { const t = document.querySelectorAll('img.rc-image-tile'); return t.length && t[t.length - 1].src !== src0; }",
                 arg=viejo, timeout=timeout)
         else:
             frame.wait_for_function(
@@ -489,8 +504,19 @@ def _reto_real(page, max_intentos=3):
     checkbox.click(timeout=20000)
     print("Checkbox clickeado. Esperando el reto...")
 
-    if _loop_reto(max_intentos, ronda=lambda: _ronda_reto(page),
-                  esperar=lambda: _esperar_reto_nuevo(page)):
+    # La ronda devuelve (verificada, src_anterior): el src del tile capturado
+    # ANTES del VERIFY se pasa al espera de re-render (hallazgo 9).
+    estado = {"src": None}
+
+    def ronda():
+        ok, src = _ronda_reto(page)
+        estado["src"] = src
+        return ok
+
+    def esperar():
+        _esperar_reto_nuevo(page, src_anterior=estado["src"])
+
+    if _loop_reto(max_intentos, ronda=ronda, esperar=esperar):
         print("RESULTADO: checkbox VERIFICADO (reto superado).")
         return 0
     print(f"RESULTADO: reto rechazado tras {max_intentos} intentos.")
