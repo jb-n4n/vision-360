@@ -342,9 +342,26 @@ def _ronda_reto(page):
         objeto, clase, permite_skip = _instruccion_a_objeto(texto)
         print(f"Instruccion (OCR): {texto[:120]!r} -> objeto={objeto!r} clase={clase!r} skip={permite_skip}")
 
-    # 4. Captura de la cuadricula (elemento tabla del iframe).
+    # 4. Captura de la cuadricula (elemento tabla del iframe). Tras un
+    #    rechazo, la tabla nueva aparece en el DOM con los tiles VACIOS y las
+    #    imagenes cargan asincronicamente: capturar antes de que carguen
+    #    produce un PNG en blanco (verificado: 390x390, 1 solo color) y el
+    #    detector no ve nada (hallazgo 10). Se espera complete+naturalWidth;
+    #    si aun asi la captura sale casi vacia (< 4 KB), se reintenta una vez
+    #    tras 3 s.
+    try:
+        frame.wait_for_function(
+            "() => { const imgs = document.querySelectorAll('td.rc-imageselect-tile img'); "
+            "return imgs.length > 0 && [...imgs].every(i => i.complete && i.naturalWidth > 0); }",
+            timeout=20000)
+    except Exception as exc:
+        print(f"  aviso: tiles sin imagenes cargadas ({exc}); capturando igual.")
     grid = TEMP / "captcha_reto_grid.png"
     tabla.screenshot(path=str(grid))
+    if grid.stat().st_size < 4096:
+        time.sleep(3)
+        tabla.screenshot(path=str(grid))
+        print(f"  captura casi vacia ({grid.stat().st_size} bytes): recapturada tras 3 s.")
     print(f"captura de la cuadricula -> {grid}")
 
     # 5. Resolucion. Objeto COCO -> solo RT-DETR (rapido, ~20 s: el reto real
