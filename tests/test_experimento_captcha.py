@@ -10,7 +10,8 @@ from unittest import mock
 from scripts.experimento_captcha import (_loop_reto, _llamar_con_reintentos,
                                          _celdas_detector,
                                          _celdas_detector_por_celda,
-                                         _instruccion_a_objeto)
+                                         _instruccion_a_objeto,
+                                         _numeros_de_texto)
 
 
 class TestLoopReto(unittest.TestCase):
@@ -229,6 +230,26 @@ class TestInstruccionAObjeto(unittest.TestCase):
 
     def test_vacio(self):
         self.assertEqual(_instruccion_a_objeto(""), (None, None, False))
+
+
+class TestNumerosDeTexto(unittest.TestCase):
+    """Regresion de la extraccion de celdas de la respuesta del VLM."""
+
+    def test_formato_libre_separado_por_coma(self):
+        self.assertEqual(_numeros_de_texto("3, 7 y 12", 16), [3, 7, 12])
+
+    def test_fuera_de_rango_filtrado(self):
+        self.assertEqual(_numeros_de_texto("3, 7, 17", 9), [3, 7])
+
+    def test_con_texto_accesorio(self):
+        self.assertEqual(_numeros_de_texto("celdas 4 y 5", 16), [4, 5])
+
+    def test_sin_numeros(self):
+        self.assertEqual(_numeros_de_texto("ninguna", 9), [])
+        self.assertEqual(_numeros_de_texto("", 9), [])
+
+    def test_dobles_y_limite(self):
+        self.assertEqual(_numeros_de_texto("9 15 16", 16), [9, 15, 16])
 
 
 if __name__ == "__main__":

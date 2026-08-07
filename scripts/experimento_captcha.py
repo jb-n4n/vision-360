@@ -152,6 +152,12 @@ def _celdas_detector(grid, clase=None, n=3, umbral=UMBRAL_RTDETR):
 RE_NUMEROS = re.compile(r"\b(?:[1-9]|1[0-6])\b")  # celdas 1..9 (3x3) o 1..16 (4x4)
 
 
+def _numeros_de_texto(texto, max_num):
+    """Numeros de celda validos (1..max_num) mencionados en la respuesta del
+    VLM: tolera formato libre ("3, 7 y 12", "celdas 4 y 5", "ninguna")."""
+    return [int(m) for m in RE_NUMEROS.findall(texto) if int(m) <= max_num]
+
+
 def _celdas_vlm(grid, objeto, n=3):
     """VLM + SoM via daemon: numeros de celda que menciona el modelo."""
     som = _som(grid, TEMP / "captcha_som.png", n=n)
@@ -163,7 +169,7 @@ def _celdas_vlm(grid, objeto, n=3):
         "engine": "ollama",
     })
     texto = res.get("answer", "")
-    numeros = [int(m) for m in RE_NUMEROS.findall(texto) if int(m) <= n * n]
+    numeros = _numeros_de_texto(texto, n * n)
     return texto, numeros
 
 
