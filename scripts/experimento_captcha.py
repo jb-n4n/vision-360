@@ -307,8 +307,14 @@ def _ronda_reto(page):
     frame.locator("table.rc-imageselect-table, td.rc-imageselect-tile, img.rc-image-tile").first.wait_for(timeout=30000)
     print("Reto detectado en el iframe.")
 
-    # Tamano de la cuadricula: 3x3 (9 tiles) o 4x4 (16 tiles).
-    tabla = frame.locator("table.rc-imageselect-table-33, table.rc-imageselect-table-44, table.rc-imageselect-table").first
+    # Tamano de la cuadricula: 3x3 (9 tiles) o 4x4 (16 tiles). Tras un rechazo
+    # Google APPENDEA una tabla nueva y deja la vieja en el DOM (leccion 18,
+    # hallazgo 9): .last es la del reto ACTUAL; .first seria la resuelta.
+    tablas = frame.locator("table.rc-imageselect-table-33, table.rc-imageselect-table-44, table.rc-imageselect-table")
+    n_tablas = tablas.count()
+    tabla = tablas.last
+    if n_tablas > 1:
+        print(f"  aviso: {n_tablas} tablas en el DOM; usando la ultima (reto actual).")
     try:
         n = 4 if "table-44" in (tabla.get_attribute("class") or "") else 3
     except Exception:
@@ -375,8 +381,11 @@ def _ronda_reto(page):
         if not skip_usado:
             print("Instruccion permite SKIP pero no se encontro el boton.")
 
-    # 6. Clic en las celdas (mapeo por bbox: robusto al orden del DOM).
-    tiles = frame.locator("td.rc-imageselect-tile, table.rc-imageselect-table img.rc-image-tile")
+    # 6. Clic en las celdas (mapeo por bbox: robusto al orden del DOM). Los
+    #    tiles se buscan DENTRO de la tabla actual (.last): si se usaran todos
+    #    los del frame, contarian tambien los de la tabla vieja tras un
+    #    rechazo (32 en vez de 16) y el mapeo quedaria desfasado (hallazgo 9).
+    tiles = tabla.locator("td.rc-imageselect-tile")
     tb = tabla.bounding_box()
     n_tiles = tiles.count()
     print(f"  tiles en el DOM: {n_tiles}")
