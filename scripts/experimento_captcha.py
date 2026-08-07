@@ -21,10 +21,13 @@ Diseno:
 Uso:
   .venv-ocr/Scripts/python.exe scripts/experimento_captcha.py          # REAL por defecto
   .venv-ocr/Scripts/python.exe scripts/experimento_captcha.py --local  # demo sintetica
+  .venv-ocr/Scripts/python.exe scripts/experimento_captcha.py --intentos 3  # reintentos tras rechazo
 
 NOTA (decision del programador): el modo REAL es el comportamiento por
 defecto por decision explicita del responsable del proyecto. --local genera
-una pagina sintetica 3x3 para pruebas deterministas sin red.
+una pagina sintetica 3x3 para pruebas deterministas sin red. Si el reto es
+rechazado, reCAPTCHA re-renderiza un reto nuevo y el experimento reintenta
+automaticamente hasta --intentos rondas (default 3).
 
 Requiere: daemon corriendo (.venv-ocr/Scripts/python.exe ocr_server.py
 --port 8131 --timeout 0 --ask-engine ollama) y Ollama compartido en 11434.
@@ -400,8 +403,51 @@ def _ronda_reto(page):
     return verificada
 
 
-def _reto_real(page):
-    """Loop completo contra el demo oficial: checkbox -> reto -> resolver -> clic."""
+def _esperar_reto_nuevo(page, timeout=45000):
+    """Espera el re-render del reto tras un rechazo: el src absoluto del
+    primer tile de imagen cambia cuando Google re-renderiza la cuadricula.
+    Tolerante: si no se detecta el cambio, se continua con lo que haya."""
+    frame = next((f for f in page.frames if "bframe" in (f.url or "")), None)
+    if frame is None:
+        print("  aviso: no se encontro el iframe bframe; continuando.")
+        return
+    tile = frame.locator("img.rc-image-tile").first
+    try:
+        viejo = tile.evaluate("el => el.src")
+    except Exception:
+        viejo = None
+    try:
+        if viejo:
+            frame.wait_for_function(
+                "(src0) => { const t = document.querySelector('img.rc-image-tile'); return t && t.src !== src0; }",
+                arg=viejo, timeout=timeout)
+        else:
+            frame.wait_for_function(
+                "() => document.querySelector('img.rc-image-tile') !== null",
+                timeout=timeout)
+        print("  re-render del reto detectado (nueva imagen de tiles).")
+    except Exception as exc:
+        print(f"  aviso: no se detecto re-render del reto ({exc}); continuando.")
+
+
+def _loop_reto(max_intentos, ronda, esperar):
+    """Bucle de intentos: llama ronda() (callable -> bool: True = verificado)
+    hasta max_intentos veces; entre rechazos llama esperar() para aguardar el
+    re-render del reto. Devuelve True si alguna ronda verifico."""
+    for intento in range(1, max_intentos + 1):
+        print(f"\n== Intento {intento}/{max_intentos} ==")
+        if ronda():
+            return True
+        if intento < max_intentos:
+            print(f"Rechazado. Esperando re-render del reto (intento {intento + 1})...")
+            esperar()
+    return False
+
+
+def _reto_real(page, max_intentos=3):
+    """Loop completo contra el demo oficial: checkbox -> reto -> resolver ->
+    clic; si el reto es rechazado, espera el re-render y reintenta hasta
+    max_intentos rondas (leccion 18, pendiente 2)."""
     page.goto("https://www.google.com/recaptcha/api2/demo", timeout=60000)
     print("Demo REAL de reCAPTCHA v2 abierto en navegador temporal.")
 
@@ -411,10 +457,11 @@ def _reto_real(page):
     checkbox.click(timeout=20000)
     print("Checkbox clickeado. Esperando el reto...")
 
-    if _ronda_reto(page):
+    if _loop_reto(max_intentos, ronda=lambda: _ronda_reto(page),
+                  esperar=lambda: _esperar_reto_nuevo(page)):
         print("RESULTADO: checkbox VERIFICADO (reto superado).")
         return 0
-    print("RESULTADO: reto rechazado o re-renderizado (seguiria otro intento).")
+    print(f"RESULTADO: reto rechazado tras {max_intentos} intentos.")
     return 1
 
 
@@ -422,7 +469,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--local", action="store_true",
                     help="Usar la demo sintetica local (file://) en vez del demo real de reCAPTCHA v2 (default)")
+    ap.add_argument("--intentos", type=int, default=3,
+                    help="Rondas maximas contra el reto real tras un rechazo (default 3; 1 = sin reintento)")
     args = ap.parse_args()
+    if args.intentos < 1:
+        print(f"Error: --intentos debe ser >= 1 (recibido {args.intentos})")
+        return 2
 
     from playwright.sync_api import sync_playwright
 
@@ -434,7 +486,7 @@ def main():
 
         if not args.local:
             try:
-                return _reto_real(page)
+                return _reto_real(page, max_intentos=args.intentos)
             finally:
                 browser.close()  # temporal: nada persiste
 
