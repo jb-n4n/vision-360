@@ -133,7 +133,8 @@ def _celdas_detector(grid, clase=None, n=3, umbral=UMBRAL_RTDETR):
     Si `clase` no es None, solo cuenta detecciones de esa clase COCO."""
     from PIL import Image
 
-    w, h = Image.open(grid).size
+    with Image.open(grid) as im:
+        w, h = im.size
     res = _post("/vision", {"image": str(grid), "modo": "objetos"})
     celdas = {}
     for d in res.get("detecciones", []):
@@ -198,7 +199,8 @@ def _celdas_detector_por_celda(grid, clase=None, n=3, umbral=UMBRAL_RTDETR):
     solo si ambas fallan)."""
     from PIL import Image
 
-    img = Image.open(grid).convert("RGB")
+    with Image.open(grid) as im:
+        img = im.convert("RGB")
     w, h = img.size
     cw, ch = w // n, h // n
     celdas = {}
