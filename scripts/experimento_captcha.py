@@ -338,11 +338,28 @@ def _ronda_reto(page, n_ronda=None):
     # Tamano de la cuadricula: 3x3 (9 tiles) o 4x4 (16 tiles). Tras un rechazo
     # Google APPENDEA una tabla nueva y deja la vieja en el DOM (leccion 18,
     # hallazgo 9): .last es la del reto ACTUAL; .first seria la resuelta.
+    # Hallazgo 12: en vivo la tabla appendeada quedo VACIA (captura en blanco
+    # identica en rondas 2-3) y el reto nuevo parecia renderizarse en la
+    # tabla vieja: se elige la tabla cuyos tiles tengan contenido, con
+    # preferencia .last.
     tablas = frame.locator("table.rc-imageselect-table-33, table.rc-imageselect-table-44, table.rc-imageselect-table")
     n_tablas = tablas.count()
     tabla = tablas.last
     if n_tablas > 1:
-        print(f"  aviso: {n_tablas} tablas en el DOM; usando la ultima (reto actual).")
+        for candidata in (tablas.last, tablas.first):
+            try:
+                con_contenido = candidata.locator("td.rc-imageselect-tile").first.evaluate(
+                    "td => { const bg = getComputedStyle(td).backgroundImage; "
+                    "const im = td.querySelector('img'); "
+                    "return (bg && bg !== 'none') || (im && im.complete && im.naturalWidth > 0); }")
+            except Exception:
+                con_contenido = False
+            if con_contenido:
+                tabla = candidata
+                print(f"  aviso: {n_tablas} tablas; elegida la tabla con tiles con contenido.")
+                break
+        else:
+            print(f"  aviso: {n_tablas} tablas, ninguna con contenido; usando la ultima.")
     try:
         n = 4 if "table-44" in (tabla.get_attribute("class") or "") else 3
     except Exception:
@@ -400,6 +417,14 @@ def _ronda_reto(page, n_ronda=None):
         time.sleep(3)
         tabla.screenshot(path=str(grid))
         print(f"  captura casi vacia ({grid.stat().st_size} bytes): recapturada tras 3 s.")
+        # Diagnostico (hallazgo 12): la imagen del tile no esta en el td
+        # (backgroundImage="none") ni en img.rc-image-tile: se imprime el
+        # HTML real del primer tile para ver donde esta.
+        try:
+            html_tile = tabla.locator("td.rc-imageselect-tile").first.inner_html()[:300]
+            print(f"  diagnostico primer tile: {html_tile!r}")
+        except Exception:
+            pass
     print(f"captura de la cuadricula -> {grid}")
 
     # 5. Resolucion. Objeto COCO -> solo RT-DETR (rapido, ~20 s: el reto real
@@ -422,12 +447,21 @@ def _ronda_reto(page, n_ronda=None):
     #     permite -> SKIP en vez de marcar celdas (leccion: crosswalks real).
     skip_usado = False
     if not elegidas and permite_skip:
+        # Selectores reales vistos en vivo (hallazgo 12): cuando la
+        # instruccion permite skip, el boton es `div.verify-button-holder`
+        # con texto "Skip" (el mismo div del VERIFY, pero con etiqueta Skip).
         for sel in ("button#recaptcha-skip-button", "div.rc-button-skip",
-                    "button.rc-button-skip"):
+                    "button.rc-button-skip", "div.verify-button-holder"):
             try:
                 loc = frame.locator(sel).first
                 if loc.count() and loc.is_visible():
-                    loc.evaluate("el => el.click()")
+                    # El click va al boton real DENTRO del holder (el div
+                    # puede no tener handler propio).
+                    boton_skip = loc.locator("button").first
+                    if boton_skip.count():
+                        boton_skip.evaluate("el => el.click()")
+                    else:
+                        loc.evaluate("el => el.click()")
                     print("SKIP clickeado (JS): sin celdas con el objeto.")
                     skip_usado = True
                     break
