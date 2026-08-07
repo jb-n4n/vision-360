@@ -22,6 +22,14 @@ import json
 import os
 import sys
 
+# Bug paddlepaddle 3.3.1 (PIR + oneDNN, issue #18162): el flag se lee al
+# importar paddlex, NO al crear el predictor. Se fija al importar este modulo
+# (antes de cualquier import de paddleocr/paddlex, que son perezosos pero
+# quedan "quemados" para el RT-DETR de /vision objetos si algo los importo
+# antes en el proceso; leccion 11 y 18). setdefault: un override del
+# operador sigue ganando.
+os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
+
 import pandas as pd
 
 from extractor_final import markdown_a_df, obtener_markdown
@@ -188,9 +196,9 @@ def modo_doc(imagen: str) -> dict:
 
 
 def modo_objetos(imagen: str, solo_personas: bool) -> dict:
-    # mkldnn roto en paddlepaddle 3.3.1 (PIR + oneDNN, issue #18162): se
-    # desactiva por defecto ANTES de importar paddlex (lee el flag al importar)
-    os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
+    # El flag PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=0 ya se fijo al importar
+    # este modulo (antes de cualquier import de paddlex: se lee al importar,
+    # issue #18162); aqui solo queda el import perezoso del predictor.
     from paddlex import create_model  # import perezoso
     modelo = create_model("RT-DETR-L")
     res = list(modelo.predict(imagen))  # predict es generador

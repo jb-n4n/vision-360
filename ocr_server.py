@@ -63,6 +63,14 @@ import traceback
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+# Bug paddlepaddle 3.3.1 (PIR + oneDNN, issue #18162): el flag se lee al
+# importar paddlex, NO al crear el predictor. Se fija ANTES de cualquier
+# import de paddleocr/paddlex: los modelos se cargan perezosos, pero si una
+# peticion previa (OCR, chart) ya importo paddlex, el modo /vision objetos
+# (RT-DETR) falla con ConvertPirAttribute2RuntimeAttribute. setdefault para
+# que un override explicito del operador siga ganando (leccion 11 y 18).
+os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
+
 sys.path.insert(0, __import__("os").path.dirname(__file__))
 from chart_server import df_a_markdown, vigia  # noqa: E402
 from extractor_final import markdown_a_df, obtener_markdown  # noqa: E402

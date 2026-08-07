@@ -96,5 +96,16 @@ class TestSalida(unittest.TestCase):
         self.assertIn("| 1 | 2 |", salida)
 
 
+class TestFlagMkldnn(unittest.TestCase):
+    """Regresion (bug paddlepaddle 3.3.1 PIR+oneDNN, issue #18162): el flag
+    debe quedar fijado al importar vision.py, ANTES de cualquier import de
+    paddlex (si no, RT-DETR de /vision objetos falla en procesos que ya
+    importaron paddlex: leccion 18, hallazgo de la validacion en vivo)."""
+
+    def test_flag_fijado_al_importar(self):
+        import os
+        self.assertEqual(os.environ.get("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"), "0")
+
+
 if __name__ == "__main__":
     unittest.main()
