@@ -234,7 +234,7 @@
 7. **Estabilidad**: la sesion paralela reinicia el daemon a mitad de ejecucion y corta el loop (el experimento murio con exit -1 sin traceback; el daemon registro el ConnectionReset del cliente). El loop por celda ahora tolera fallos por celda.
 
 **Pendientes (seguir):**
-1. Verificar la pasada por celda offline sobre la cuadricula 4x4 de motos guardada (captcha_reto_grid.png en temp) â€” el daemon se reinicio a mitad y corto la prueba.
-2. Reintento automatico de 2-3 rondas cuando el reto se re-renderiza tras un rechazo.
+1. Verificar la pasada por celda offline sobre la cuadricula 4x4 de motos guardada (captcha_reto_grid.png en temp) — el daemon se reinicio a mitad y corto la prueba.
+2. ~~Reintento automatico de 2-3 rondas cuando el reto se re-renderiza tras un rechazo.~~ **HECHO (2026-08-07):** `_loop_reto` + `--intentos` (default 3) + `_esperar_reto_nuevo` (detecta el re-render por el cambio del src absoluto del primer tile `img.rc-image-tile` en el bframe; tolerante si no lo detecta). El bucle se extrajo a funcion pura para testearlo sin playwright: 4 tests en `tests/test_experimento_captcha.py` (verificador: 106 tests OK). Pendiente: validacion en vivo del re-render (el src cambia de verdad en el demo real).
 3. Evaluar /vision por CLI (subproceso) en vez de n*n llamadas HTTP al daemon, o reintento por celda, para resistir reinicios del daemon.
 4. Validar SKIP en vivo (reto crosswalks con "If there are none, click skip").
