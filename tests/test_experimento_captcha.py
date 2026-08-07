@@ -9,7 +9,8 @@ from unittest import mock
 
 from scripts.experimento_captcha import (_loop_reto, _llamar_con_reintentos,
                                          _celdas_detector,
-                                         _celdas_detector_por_celda)
+                                         _celdas_detector_por_celda,
+                                         _instruccion_a_objeto)
 
 
 class TestLoopReto(unittest.TestCase):
@@ -169,6 +170,65 @@ class TestMapeoCeldas(unittest.TestCase):
                  mock.patch("scripts.experimento_captcha.time.sleep"):
                 celdas = _celdas_detector_por_celda(grid, clase="bus", n=2)
             self.assertEqual(celdas, {3: [("bus", 0.8)], 4: [("bus", 0.8)]})
+
+
+class TestInstruccionAObjeto(unittest.TestCase):
+    """Regresion del parser de instrucciones con cadenas REALES del demo
+    (leccion 18): prefijos, articulos, plurales irregulares, texto
+    concatenado sin espacio y flag de skip."""
+
+    def test_buses_concatenado_con_skip(self):
+        self.assertEqual(
+            _instruccion_a_objeto(
+                "Select all squares with busesIf there are none, click skip"),
+            ("bus", "bus", True))
+
+    def test_cars_concatenado_sin_skip(self):
+        self.assertEqual(
+            _instruccion_a_objeto(
+                "Select all images with carsClick verify once there are none left"),
+            ("car", "car", False))
+
+    def test_bicycles_concatenado(self):
+        self.assertEqual(
+            _instruccion_a_objeto(
+                "Select all images with bicyclesClick verify once there are none left"),
+            ("bicycle", "bicycle", False))
+
+    def test_articulo_a_fire_hydrant(self):
+        self.assertEqual(
+            _instruccion_a_objeto("Select all squares with a fire hydrant"),
+            ("fire hydrant", "fire hydrant", False))
+
+    def test_traffic_lights_singularizado(self):
+        self.assertEqual(
+            _instruccion_a_objeto(
+                "Select all images with traffic lightsIf there are none, click skip"),
+            ("traffic light", "traffic light", True))
+
+    def test_crosswalks_solo_vlm(self):
+        self.assertEqual(
+            _instruccion_a_objeto(
+                "Select all tiles with crosswalksIf there are none, click skip"),
+            ("crosswalk", None, True))
+
+    def test_motorcycles_plural_regular(self):
+        self.assertEqual(
+            _instruccion_a_objeto("Select all squares with motorcycles"),
+            ("motorcycle", "motorcycle", False))
+
+    def test_stop_signs_plural_compuesto(self):
+        self.assertEqual(
+            _instruccion_a_objeto("Select all images with stop signs"),
+            ("stop sign", "stop sign", False))
+
+    def test_solo_mensaje_de_skip(self):
+        self.assertEqual(
+            _instruccion_a_objeto("If there are none, click skip"),
+            (None, None, True))
+
+    def test_vacio(self):
+        self.assertEqual(_instruccion_a_objeto(""), (None, None, False))
 
 
 if __name__ == "__main__":
