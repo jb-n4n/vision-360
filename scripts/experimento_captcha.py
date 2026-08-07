@@ -323,11 +323,12 @@ def _diagnostico_botones(frame, max_elems=15):
         print(f"  diagnostico SKIP fallo: {exc}")
 
 
-def _ronda_reto(page):
+def _ronda_reto(page, n_ronda=None):
     """Una ronda contra el reto real (dentro de un intento): detectar el reto
     en el iframe, leer la instruccion, capturar la cuadricula, resolverla,
     clickear celdas + VERIFY (o SKIP) y devolver el veredicto real del ancla
-    (True si el checkbox quedo verificado)."""
+    (True si el checkbox quedo verificado). n_ronda (1..max_intentos) se usa
+    para nombrar la captura por ronda (analisis offline, pendiente 1)."""
     # 2. Reto en el iframe grande (bframe). El marcado real usa
     #    table.rc-imageselect-table-33/-44 y td.rc-imageselect-tile.
     frame = page.frame_locator("iframe[src*='bframe']")
@@ -373,17 +374,27 @@ def _ronda_reto(page):
     #    rechazo, la tabla nueva aparece en el DOM con los tiles VACIOS y las
     #    imagenes cargan asincronicamente: capturar antes de que carguen
     #    produce un PNG en blanco (verificado: 390x390, 1 solo color) y el
-    #    detector no ve nada (hallazgo 10). Se espera complete+naturalWidth;
-    #    si aun asi la captura sale casi vacia (< 4 KB), se reintenta una vez
-    #    tras 3 s.
-    try:
-        frame.wait_for_function(
-            "() => { const imgs = document.querySelectorAll('td.rc-imageselect-tile img'); "
-            "return imgs.length > 0 && [...imgs].every(i => i.complete && i.naturalWidth > 0); }",
-            timeout=20000)
-    except Exception as exc:
-        print(f"  aviso: tiles sin imagenes cargadas ({exc}); capturando igual.")
-    grid = TEMP / "captcha_reto_grid.png"
+    #    detector no ve nada (hallazgo 10). Los tiles NO llevan <img>
+    #    (verificado en vivo): la imagen es background-image del td; se
+    #    espera img cargada (si hubiera) O background no vacio. El wait va
+    #    sobre el Frame REAL (page.frames), no el FrameLocator: este no
+    #    expone wait_for_function (hallazgo 11, bug propio corregido).
+    bframe = next((f for f in page.frames if "bframe" in (f.url or "")), None)
+    if bframe is not None:
+        try:
+            bframe.wait_for_function(
+                "() => { const tds = document.querySelectorAll('td.rc-imageselect-tile'); "
+                "const imgs = document.querySelectorAll('td.rc-imageselect-tile img'); "
+                "const conImg = imgs.length > 0 && [...imgs].every(i => i.complete && i.naturalWidth > 0); "
+                "const conBg = tds.length > 0 && [...tds].every(td => { const bg = getComputedStyle(td).backgroundImage; return bg && bg !== 'none'; }); "
+                "return conImg || conBg; }",
+                timeout=20000)
+        except Exception as exc:
+            print(f"  aviso: tiles sin imagen lista ({exc}); capturando igual.")
+    else:
+        print("  aviso: no se encontro el bframe; capturando igual.")
+    grid = TEMP / (f"captcha_reto_grid_{n_ronda}.png" if n_ronda
+                   else "captcha_reto_grid.png")
     tabla.screenshot(path=str(grid))
     if grid.stat().st_size < 4096:
         time.sleep(3)
@@ -465,14 +476,15 @@ def _ronda_reto(page):
             except Exception:
                 continue
         if boton is not None:
-            # src del tile actual ANTES del VERIFY: es la grid que se manda a
-            # revisar; _esperar_reto_nuevo la usa para detectar el re-render
+            # "src" del tile actual ANTES del VERIFY: es la grid que se manda
+            # a revisar; _esperar_reto_nuevo la usa para detectar el re-render
             # (capturado aqui, el cambio SI se ve; capturado despues de los
             # 6 s de espera ya habria cambiado y el wait haria timeout,
-            # hallazgo 9).
+            # hallazgo 9). Los tiles no llevan <img>: su "src" real es el
+            # background-image del td (hallazgo 11).
             try:
-                src_anterior = frame.locator("img.rc-image-tile").last.evaluate(
-                    "el => el.src")
+                src_anterior = frame.locator("td.rc-imageselect-tile").last.evaluate(
+                    "el => getComputedStyle(el).backgroundImage || el.style.backgroundImage || el.src || ''")
             except Exception:
                 src_anterior = None
             boton.evaluate("el => el.click()")
@@ -492,35 +504,39 @@ def _ronda_reto(page):
 
 
 def _esperar_reto_nuevo(page, src_anterior=None, timeout=45000):
-    """Espera el re-render del reto tras un rechazo: el src absoluto del
-    ULTIMO tile de imagen cambia cuando Google re-renderiza la cuadricula
-    (appendea una tabla nueva; la vieja queda en el DOM, hallazgo 9).
+    """Espera el re-render del reto tras un rechazo: el "src" del ULTIMO tile
+    (background-image del td; los tiles no llevan <img>, hallazgo 11) cambia
+    cuando Google re-renderiza la cuadricula (appendea una tabla nueva; la
+    vieja queda en el DOM, hallazgo 9).
 
-    src_anterior: src capturado ANTES de clickear VERIFY (la grid actual);
+    src_anterior: "src" capturado ANTES de clickear VERIFY (la grid actual);
     si es None se captura aqui (caso: no hubo VERIFY). Tolerante: si no se
     detecta el cambio, se continua con lo que haya."""
     frame = next((f for f in page.frames if "bframe" in (f.url or "")), None)
     if frame is None:
         print("  aviso: no se encontro el iframe bframe; continuando.")
         return
-    tile = frame.locator("img.rc-image-tile").last
+    tile = frame.locator("td.rc-imageselect-tile").last
     try:
-        viejo = src_anterior or tile.evaluate("el => el.src")
+        viejo = src_anterior or tile.evaluate(
+            "el => getComputedStyle(el).backgroundImage || el.style.backgroundImage || el.src || ''")
     except Exception:
         viejo = None
     try:
         if viejo:
             frame.wait_for_function(
-                "(src0) => { const t = document.querySelectorAll('img.rc-image-tile'); return t.length && t[t.length - 1].src !== src0; }",
+                "(src0) => { const t = document.querySelectorAll('td.rc-imageselect-tile'); "
+                "return t.length && (getComputedStyle(t[t.length - 1]).backgroundImage || t[t.length - 1].style.backgroundImage || t[t.length - 1].src || '') !== src0; }",
                 arg=viejo, timeout=timeout)
         else:
             frame.wait_for_function(
-                "() => document.querySelector('img.rc-image-tile') !== null",
+                "() => document.querySelector('td.rc-imageselect-tile') !== null",
                 timeout=timeout)
         print("  re-render del reto detectado (nueva imagen de tiles).")
     except Exception as exc:
         try:
-            src_actual = tile.evaluate("el => el.src")
+            src_actual = tile.evaluate(
+                "el => getComputedStyle(el).backgroundImage || el.style.backgroundImage || el.src || ''")
         except Exception:
             src_actual = None
         corto = lambda s: (str(s)[:64] + "...") if s else s
@@ -556,11 +572,13 @@ def _reto_real(page, max_intentos=3):
     print("Checkbox clickeado. Esperando el reto...")
 
     # La ronda devuelve (verificada, src_anterior): el src del tile capturado
-    # ANTES del VERIFY se pasa al espera de re-render (hallazgo 9).
-    estado = {"src": None}
+    # ANTES del VERIFY se pasa al espera de re-render (hallazgo 9). Se cuenta
+    # la ronda para nombrar las capturas (analisis offline, pendiente 1).
+    estado = {"src": None, "ronda": 0}
 
     def ronda():
-        ok, src = _ronda_reto(page)
+        estado["ronda"] += 1
+        ok, src = _ronda_reto(page, n_ronda=estado["ronda"])
         estado["src"] = src
         return ok
 
