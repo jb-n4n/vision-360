@@ -510,15 +510,15 @@ def _ronda_reto(page, n_ronda=None):
             except Exception:
                 continue
         if boton is not None:
-            # "src" del tile actual ANTES del VERIFY: es la grid que se manda
-            # a revisar; _esperar_reto_nuevo la usa para detectar el re-render
+            # src del tile actual ANTES del VERIFY: es la grid que se manda a
+            # revisar; _esperar_reto_nuevo la usa para detectar el re-render
             # (capturado aqui, el cambio SI se ve; capturado despues de los
             # 6 s de espera ya habria cambiado y el wait haria timeout,
-            # hallazgo 9). Los tiles no llevan <img>: su "src" real es el
-            # background-image del td (hallazgo 11).
+            # hallazgo 9). La imagen del tile es un <img> anidado con clase
+            # rc-image-tile-33/-44 (URL payload?p=...; hallazgo 12).
             try:
-                src_anterior = frame.locator("td.rc-imageselect-tile").last.evaluate(
-                    "el => getComputedStyle(el).backgroundImage || el.style.backgroundImage || el.src || ''")
+                src_anterior = frame.locator("td.rc-imageselect-tile img").last.evaluate(
+                    "el => el.src || ''")
             except Exception:
                 src_anterior = None
             boton.evaluate("el => el.click()")
@@ -538,39 +538,38 @@ def _ronda_reto(page, n_ronda=None):
 
 
 def _esperar_reto_nuevo(page, src_anterior=None, timeout=45000):
-    """Espera el re-render del reto tras un rechazo: el "src" del ULTIMO tile
-    (background-image del td; los tiles no llevan <img>, hallazgo 11) cambia
-    cuando Google re-renderiza la cuadricula (appendea una tabla nueva; la
-    vieja queda en el DOM, hallazgo 9).
+    """Espera el re-render del reto tras un rechazo: el src del <img> del
+    ULTIMO tile (clase rc-image-tile-33/-44, URL payload?p=...; hallazgo 12)
+    cambia cuando Google re-renderiza la cuadricula (appendea una tabla
+    nueva; la vieja queda en el DOM, hallazgo 9).
 
-    src_anterior: "src" capturado ANTES de clickear VERIFY (la grid actual);
+    src_anterior: src capturado ANTES de clickear VERIFY (la grid actual);
     si es None se captura aqui (caso: no hubo VERIFY). Tolerante: si no se
     detecta el cambio, se continua con lo que haya."""
     frame = next((f for f in page.frames if "bframe" in (f.url or "")), None)
     if frame is None:
         print("  aviso: no se encontro el iframe bframe; continuando.")
         return
-    tile = frame.locator("td.rc-imageselect-tile").last
+    tile = frame.locator("td.rc-imageselect-tile img").last
     try:
-        viejo = src_anterior or tile.evaluate(
-            "el => getComputedStyle(el).backgroundImage || el.style.backgroundImage || el.src || ''")
+        viejo = src_anterior or tile.evaluate("el => el.src || ''")
     except Exception:
         viejo = None
     try:
         if viejo:
             frame.wait_for_function(
-                "(src0) => { const t = document.querySelectorAll('td.rc-imageselect-tile'); "
-                "return t.length && (getComputedStyle(t[t.length - 1]).backgroundImage || t[t.length - 1].style.backgroundImage || t[t.length - 1].src || '') !== src0; }",
+                "(src0) => { const ts = document.querySelectorAll('td.rc-imageselect-tile'); "
+                "if (!ts.length) return false; const im = ts[ts.length - 1].querySelector('img'); "
+                "return im && (im.src || '') !== src0; }",
                 arg=viejo, timeout=timeout)
         else:
             frame.wait_for_function(
-                "() => document.querySelector('td.rc-imageselect-tile') !== null",
+                "() => document.querySelector('td.rc-imageselect-tile img') !== null",
                 timeout=timeout)
         print("  re-render del reto detectado (nueva imagen de tiles).")
     except Exception as exc:
         try:
-            src_actual = tile.evaluate(
-                "el => getComputedStyle(el).backgroundImage || el.style.backgroundImage || el.src || ''")
+            src_actual = tile.evaluate("el => el.src || ''")
         except Exception:
             src_actual = None
         corto = lambda s: (str(s)[:64] + "...") if s else s
